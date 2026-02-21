@@ -16,7 +16,11 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
   const rows = await runRead(
     `MATCH (a:App {appName: $appId})-[acc:ACCESSED]->(m:Memory)
-     RETURN m.id AS memory_id, m.content AS content,
+     OPTIONAL MATCH (m)-[:HAS_CATEGORY]->(c:Category)
+     RETURN m.id AS id, m.content AS content, m.state AS state,
+            m.createdAt AS createdAt, m.metadata AS metadata,
+            a.appName AS app_name,
+            collect(c.name) AS categories,
             acc.accessedAt AS accessed_at, acc.queryUsed AS query_used
      ORDER BY acc.accessedAt DESC SKIP $skip LIMIT $limit`,
     { appId, skip, limit: pageSize }
@@ -28,11 +32,23 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   const total = (countRows[0] as any)?.total ?? 0;
   return NextResponse.json({
     total, page, page_size: pageSize,
-    results: rows.map((r: any) => ({
-      memory_id: r.memory_id,
-      content: r.content,
-      accessed_at: r.accessed_at,
-      query_used: r.query_used,
+    memories: rows.map((r: any) => ({
+      memory: {
+        id: r.id,
+        content: r.content,
+        state: r.state || "active",
+        created_at: r.createdAt || null,
+        app_id: null,
+        app_name: r.app_name ?? appId,
+        categories: r.categories || [],
+        metadata_: r.metadata ? (typeof r.metadata === "string" ? JSON.parse(r.metadata) : r.metadata) : null,
+        user_id: "",
+        updated_at: r.createdAt || null,
+        deleted_at: null,
+        vector: null,
+        archived_at: null,
+      },
+      access_count: 1,
     })),
   });
 }

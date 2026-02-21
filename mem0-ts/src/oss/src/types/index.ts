@@ -37,9 +37,6 @@ export interface HistoryStoreConfig {
     password?: string;
     /** KuzuDB database path; omit or use ":memory:" for in-process in-memory store */
     dbPath?: string;
-    /** Supabase */
-    supabaseUrl?: string;
-    supabaseKey?: string;
     tableName?: string;
   };
 }

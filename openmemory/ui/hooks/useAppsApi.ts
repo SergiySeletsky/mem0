@@ -115,7 +115,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
     dispatch(setSelectedAppLoading());
     try {
       const response = await axios.get<AppDetails>(
-        `/api/v1/apps/${appId}`
+        `/api/v1/apps/${appId}?user_id=${encodeURIComponent(user_id)}`
       );
       dispatch(setSelectedAppDetails(response.data));
       setIsLoading(false);

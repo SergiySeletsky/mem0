@@ -8,9 +8,8 @@ import { runRead, runWrite } from "@/lib/db/memgraph";
 
 export function getDefaultConfiguration() {
   return {
-    openmemory: {
-      custom_instructions: null as string | null,
-    },
+    openmemory: {} as Record<string, never>,
+
     mem0: {
       vector_store: null as Record<string, unknown> | null,
     },

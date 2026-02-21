@@ -11,8 +11,7 @@ import { useMemoriesApi } from "@/hooks/useMemoriesApi";
 import Image from "next/image";
 import { useStats } from "@/hooks/useStats";
 import { useAppsApi } from "@/hooks/useAppsApi";
-import { Settings } from "lucide-react";
-import { useConfig } from "@/hooks/useConfig";
+
 
 export function Navbar() {
   const pathname = usePathname();
@@ -20,8 +19,6 @@ export function Navbar() {
   const memoriesApi = useMemoriesApi();
   const appsApi = useAppsApi();
   const statsApi = useStats();
-  const configApi = useConfig();
-
   // Define route matchers with typed parameter extraction
   const routeBasedFetchMapping: {
     match: RegExp;
@@ -54,10 +51,6 @@ export function Navbar() {
     {
       match: /^\/$/,
       getFetchers: () => [statsApi.fetchStats, memoriesApi.fetchMemories],
-    },
-    {
-      match: /^\/settings$/,
-      getFetchers: () => [configApi.fetchConfig],
     },
   ];
 
@@ -133,18 +126,6 @@ export function Navbar() {
             >
               <RiApps2AddFill />
               Apps
-            </Button>
-          </Link>
-          <Link href="/settings">
-            <Button
-              variant="outline"
-              size="sm"
-              className={`flex items-center gap-2 border-none ${
-                isActive("/settings") ? activeClass : inactiveClass
-              }`}
-            >
-              <Settings />
-              Settings
             </Button>
           </Link>
         </div>

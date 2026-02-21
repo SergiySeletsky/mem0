@@ -16,15 +16,10 @@ import {
 import { Embedder } from "../embeddings/base";
 import { LLM } from "../llms/base";
 import { VectorStore } from "../vector_stores/base";
-import { Qdrant } from "../vector_stores/qdrant";
-import { VectorizeDB } from "../vector_stores/vectorize";
-import { RedisDB } from "../vector_stores/redis";
 import { OllamaLLM } from "../llms/ollama";
-import { SupabaseDB } from "../vector_stores/supabase";
 import { MemgraphHistoryManager } from "../storage/MemgraphHistoryManager";
 import { KuzuHistoryManager } from "../storage/KuzuHistoryManager";
 import { MemoryHistoryManager } from "../storage/MemoryHistoryManager";
-import { SupabaseHistoryManager } from "../storage/SupabaseHistoryManager";
 import { HistoryManager } from "../storage/base";
 import { GoogleEmbedder } from "../embeddings/google";
 import { GoogleLLM } from "../llms/google";
@@ -37,9 +32,6 @@ import { TogetherLLM } from "../llms/together";
 import { LMStudioLLM } from "../llms/lmstudio";
 import { LangchainEmbedder } from "../embeddings/langchain";
 import { LMStudioEmbedder } from "../embeddings/lmstudio";
-import { LangchainVectorStore } from "../vector_stores/langchain";
-import { AzureAISearch } from "../vector_stores/azure_ai_search";
-import { ChromaDB as ChromaDBStore } from "../vector_stores/chroma";
 import { Reranker } from "../reranker/base";
 import { LLMReranker } from "../reranker/llm";
 import { CohereReranker } from "../reranker/cohere";
@@ -121,21 +113,6 @@ export class VectorStoreFactory {
     switch (provider.toLowerCase()) {
       case "memory":
         return new MemoryVectorStore(config);
-      case "qdrant":
-        return new Qdrant(config as any);
-      case "redis":
-        return new RedisDB(config as any);
-      case "supabase":
-        return new SupabaseDB(config as any);
-      case "langchain":
-        return new LangchainVectorStore(config as any);
-      case "vectorize":
-        return new VectorizeDB(config as any);
-      case "azure-ai-search":
-        return new AzureAISearch(config as any);
-      case "chroma":
-      case "chromadb":
-        return new ChromaDBStore(config as any);
       case "memgraph":
         return new MemgraphVectorStore(config as any);
       default:
@@ -151,12 +128,6 @@ export class HistoryManagerFactory {
         return new MemgraphHistoryManager(config.config);
       case "kuzu":
         return new KuzuHistoryManager({ dbPath: config.config.dbPath });
-      case "supabase":
-        return new SupabaseHistoryManager({
-          supabaseUrl: config.config.supabaseUrl || "",
-          supabaseKey: config.config.supabaseKey || "",
-          tableName: config.config.tableName || "memory_history",
-        });
       case "memory":
         return new MemoryHistoryManager();
       default:

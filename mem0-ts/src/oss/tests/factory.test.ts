@@ -41,41 +41,6 @@ jest.mock("ollama", () => ({
     chat: jest.fn().mockResolvedValue({ message: { content: "" } }),
   })),
 }));
-jest.mock("@qdrant/js-client-rest", () => ({
-  QdrantClient: jest.fn().mockImplementation(() => ({
-    getCollections: jest.fn().mockResolvedValue({ collections: [] }),
-    createCollection: jest.fn().mockResolvedValue(true),
-  })),
-}));
-jest.mock("redis", () => ({
-  createClient: jest.fn().mockReturnValue({
-    connect: jest.fn().mockResolvedValue(undefined),
-    on: jest.fn(),
-    ft: { _list: jest.fn().mockResolvedValue([]), create: jest.fn() },
-  }),
-}));
-// Mock Azure Search Documents so indexClient.listIndexes() returns an empty
-// async iterator immediately — prevents the constructor's initialize() call
-// from making real HTTP requests that outlive the test suite.
-jest.mock("@azure/search-documents", () => {
-  const emptyAsyncIter = {
-    [Symbol.asyncIterator]: function* () {},
-  };
-  return {
-    SearchClient: jest.fn().mockImplementation(() => ({})),
-    SearchIndexClient: jest.fn().mockImplementation(() => ({
-      listIndexes: jest.fn().mockReturnValue(emptyAsyncIter),
-      createOrUpdateIndex: jest.fn().mockResolvedValue({}),
-    })),
-    AzureKeyCredential: jest.fn().mockImplementation(() => ({})),
-    SearchField: {},
-    VectorSearchAlgorithmConfiguration: {},
-  };
-});
-jest.mock("@azure/identity", () => ({
-  DefaultAzureCredential: jest.fn().mockImplementation(() => ({})),
-  AzureKeyCredential: jest.fn().mockImplementation(() => ({})),
-}));
 
 import {
   EmbedderFactory,
@@ -83,7 +48,6 @@ import {
   VectorStoreFactory,
   RerankerFactory,
 } from "../src/utils/factory";
-import { AzureAISearch } from "../src/vector_stores/azure_ai_search";
 
 // ---- EmbedderFactory ----
 describe("EmbedderFactory", () => {
@@ -217,55 +181,6 @@ describe("VectorStoreFactory", () => {
       dimension: 128,
     });
     expect(vs.constructor.name).toBe("MemoryVectorStore");
-  });
-
-  it("should create Azure AI Search vector store", () => {
-    const config = {
-      collectionName: "test-memories",
-      serviceName: "test-service",
-      apiKey: "test-api-key",
-      embeddingModelDims: 1536,
-      compressionType: "none" as const,
-      useFloat16: false,
-      hybridSearch: false,
-      vectorFilterMode: "preFilter" as const,
-    };
-    const vs = VectorStoreFactory.create("azure-ai-search", config);
-    expect(vs).toBeInstanceOf(AzureAISearch);
-  });
-
-  it("should create qdrant store", () => {
-    const vs = VectorStoreFactory.create("qdrant", {
-      collectionName: "test",
-      embeddingModelDims: 128,
-      path: ":memory:",
-    });
-    expect(vs.constructor.name).toBe("Qdrant");
-  });
-
-  it("should create chroma store", () => {
-    try {
-      const vs = VectorStoreFactory.create("chroma", {
-        collectionName: "test",
-        path: ":memory:",
-      });
-      expect(vs.constructor.name).toBe("ChromaDB");
-    } catch (e: any) {
-      // chromadb may not be installed
-      expect(e.message).toContain("chromadb");
-    }
-  });
-
-  it("should create chromadb store (alias)", () => {
-    try {
-      const vs = VectorStoreFactory.create("chromadb", {
-        collectionName: "test",
-        path: ":memory:",
-      });
-      expect(vs.constructor.name).toBe("ChromaDB");
-    } catch (e: any) {
-      expect(e.message).toContain("chromadb");
-    }
   });
 
   it("should throw for unsupported provider", () => {

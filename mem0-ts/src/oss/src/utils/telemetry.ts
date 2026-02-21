@@ -33,7 +33,7 @@ class UnifiedTelemetry implements TelemetryClient {
       timestamp: new Date().toISOString(),
       ...properties,
       $process_person_profile:
-        distinctId === "anonymous" || distinctId === "anonymous-supabase"
+        distinctId === "anonymous"
           ? false
           : true,
       $lib: "posthog-node",

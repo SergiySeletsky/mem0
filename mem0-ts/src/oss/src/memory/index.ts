@@ -160,8 +160,7 @@ export class Memory {
     try {
       if (
         !this.telemetryId ||
-        this.telemetryId === "anonymous" ||
-        this.telemetryId === "anonymous-supabase"
+        this.telemetryId === "anonymous"
       ) {
         this.telemetryId = await this.vectorStore.getUserId();
       }

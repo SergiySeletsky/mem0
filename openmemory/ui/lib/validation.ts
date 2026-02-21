@@ -106,9 +106,7 @@ export const VectorStoreProviderSchema = z.object({
   config: z.record(z.string(), z.unknown()),
 });
 
-export const OpenMemoryConfigSchema = z.object({
-  custom_instructions: z.string().nullable().optional(),
-});
+export const OpenMemoryConfigSchema = z.object({});
 
 export const Mem0ConfigSchema = z.object({
   llm: LLMProviderSchema.nullable().optional(),

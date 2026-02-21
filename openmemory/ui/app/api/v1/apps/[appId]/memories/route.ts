@@ -34,12 +34,12 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   const total = (countRows[0] as any)?.total ?? 0;
   return NextResponse.json({
     total, page, page_size: pageSize,
-    results: rows.map((r: any) => ({
+    memories: rows.map((r: any) => ({
       id: r.id, content: r.content,
-      created_at: r.createdAt ? Math.floor(new Date(r.createdAt).getTime() / 1000) : 0,
+      created_at: r.createdAt || null,
       state: r.state || "active", app_id: null, app_name: appId,
       categories: r.categories || [],
-      metadata_: r.metadata ? JSON.parse(r.metadata) : null,
+      metadata_: r.metadata ? (typeof r.metadata === "string" ? JSON.parse(r.metadata) : r.metadata) : null,
     })),
   });
 }
