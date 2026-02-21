@@ -1,32 +1,8 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
-export interface LLMConfig {
-  model: string;
-  temperature: number;
-  max_tokens: number;
-  api_key?: string;
-  ollama_base_url?: string;
-}
-
-export interface LLMProvider {
-  provider: string;
-  config: LLMConfig;
-}
-
-export interface EmbedderConfig {
-  model: string;
-  api_key?: string;
-  ollama_base_url?: string;
-}
-
-export interface EmbedderProvider {
-  provider: string;
-  config: EmbedderConfig;
-}
-
+/** LLM and embedder are configured exclusively via environment variables. */
 export interface Mem0Config {
-  llm?: LLMProvider;
-  embedder?: EmbedderProvider;
+  vector_store?: Record<string, any> | null;
 }
 
 export interface OpenMemoryConfig {
@@ -45,22 +21,7 @@ const initialState: ConfigState = {
     custom_instructions: null,
   },
   mem0: {
-    llm: {
-      provider: 'openai',
-      config: {
-        model: 'gpt-4o-mini',
-        temperature: 0.1,
-        max_tokens: 2000,
-        api_key: 'env:OPENAI_API_KEY',
-      },
-    },
-    embedder: {
-      provider: 'openai',
-      config: {
-        model: 'text-embedding-3-small',
-        api_key: 'env:OPENAI_API_KEY',
-      },
-    },
+    vector_store: null,
   },
   status: 'idle',
   error: null,
@@ -89,12 +50,6 @@ const configSlice = createSlice({
     updateOpenMemory: (state, action: PayloadAction<OpenMemoryConfig>) => {
       state.openmemory = action.payload;
     },
-    updateLLM: (state, action: PayloadAction<LLMProvider>) => {
-      state.mem0.llm = action.payload;
-    },
-    updateEmbedder: (state, action: PayloadAction<EmbedderProvider>) => {
-      state.mem0.embedder = action.payload;
-    },
     updateMem0Config: (state, action: PayloadAction<Mem0Config>) => {
       state.mem0 = action.payload;
     },
@@ -106,8 +61,6 @@ export const {
   setConfigSuccess,
   setConfigError,
   updateOpenMemory,
-  updateLLM,
-  updateEmbedder,
   updateMem0Config,
 } = configSlice.actions;
 

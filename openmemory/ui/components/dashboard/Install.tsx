@@ -7,31 +7,25 @@ import { Copy, Check } from "lucide-react";
 import Image from "next/image";
 
 const clientTabs = [
+  { key: "vscode", label: "VS Code", icon: "/images/vscode.svg" },
   { key: "claude", label: "Claude", icon: "/images/claude.webp" },
   { key: "cursor", label: "Cursor", icon: "/images/cursor.png" },
   { key: "cline", label: "Cline", icon: "/images/cline.png" },
-  { key: "roocline", label: "Roo Cline", icon: "/images/roocline.png" },
   { key: "windsurf", label: "Windsurf", icon: "/images/windsurf.png" },
-  { key: "witsy", label: "Witsy", icon: "/images/witsy.png" },
-  { key: "enconvo", label: "Enconvo", icon: "/images/enconvo.png" },
   { key: "augment", label: "Augment", icon: "/images/augment.png" },
 ];
 
 const colorGradientMap: { [key: string]: string } = {
+  vscode:
+    "data-[state=active]:bg-[linear-gradient(to_top,_rgba(0,122,204,0.3),_rgba(0,122,204,0))] data-[state=active]:border-[#007ACC]",
   claude:
     "data-[state=active]:bg-[linear-gradient(to_top,_rgba(239,108,60,0.3),_rgba(239,108,60,0))] data-[state=active]:border-[#EF6C3C]",
   cline:
     "data-[state=active]:bg-[linear-gradient(to_top,_rgba(112,128,144,0.3),_rgba(112,128,144,0))] data-[state=active]:border-[#708090]",
   cursor:
     "data-[state=active]:bg-[linear-gradient(to_top,_rgba(255,255,255,0.08),_rgba(255,255,255,0))] data-[state=active]:border-[#708090]",
-  roocline:
-    "data-[state=active]:bg-[linear-gradient(to_top,_rgba(45,32,92,0.8),_rgba(45,32,92,0))] data-[state=active]:border-[#7E3FF2]",
   windsurf:
     "data-[state=active]:bg-[linear-gradient(to_top,_rgba(0,176,137,0.3),_rgba(0,176,137,0))] data-[state=active]:border-[#00B089]",
-  witsy:
-    "data-[state=active]:bg-[linear-gradient(to_top,_rgba(33,135,255,0.3),_rgba(33,135,255,0))] data-[state=active]:border-[#2187FF]",
-  enconvo:
-    "data-[state=active]:bg-[linear-gradient(to_top,_rgba(126,63,242,0.3),_rgba(126,63,242,0))] data-[state=active]:border-[#7E3FF2]",
 };
 
 const getColorGradient = (color: string) => {
@@ -85,19 +79,16 @@ export const Install = () => {
       <h2 className="text-xl font-semibold mb-6">Install OpenMemory</h2>
 
       <div className="hidden">
+        <div className="data-[state=active]:bg-[linear-gradient(to_top,_rgba(0,122,204,0.3),_rgba(0,122,204,0))] data-[state=active]:border-[#007ACC]"></div>
         <div className="data-[state=active]:bg-[linear-gradient(to_top,_rgba(239,108,60,0.3),_rgba(239,108,60,0))] data-[state=active]:border-[#EF6C3C]"></div>
         <div className="data-[state=active]:bg-[linear-gradient(to_top,_rgba(112,128,144,0.3),_rgba(112,128,144,0))] data-[state=active]:border-[#708090]"></div>
-        <div className="data-[state=active]:bg-[linear-gradient(to_top,_rgba(45,32,92,0.3),_rgba(45,32,92,0))] data-[state=active]:border-[#2D205C]"></div>
         <div className="data-[state=active]:bg-[linear-gradient(to_top,_rgba(0,176,137,0.3),_rgba(0,176,137,0))] data-[state=active]:border-[#00B089]"></div>
-        <div className="data-[state=active]:bg-[linear-gradient(to_top,_rgba(33,135,255,0.3),_rgba(33,135,255,0))] data-[state=active]:border-[#2187FF]"></div>
-        <div className="data-[state=active]:bg-[linear-gradient(to_top,_rgba(126,63,242,0.3),_rgba(126,63,242,0))] data-[state=active]:border-[#7E3FF2]"></div>
-        <div className="data-[state=active]:bg-[linear-gradient(to_top,_rgba(239,108,60,0.3),_rgba(239,108,60,0))] data-[state=active]:border-[#EF6C3C]"></div>
-        <div className="data-[state=active]:bg-[linear-gradient(to_top,_rgba(107,33,168,0.3),_rgba(107,33,168,0))] data-[state=active]:border-primary"></div>
         <div className="data-[state=active]:bg-[linear-gradient(to_top,_rgba(255,255,255,0.08),_rgba(255,255,255,0))] data-[state=active]:border-[#708090]"></div>
+        <div className="data-[state=active]:bg-[linear-gradient(to_top,_rgba(126,63,242,0.3),_rgba(126,63,242,0))] data-[state=active]:border-[#7E3FF2]"></div>
       </div>
 
-      <Tabs defaultValue="claude" className="w-full">
-        <TabsList className="bg-transparent border-b border-zinc-800 rounded-none w-full justify-start gap-0 p-0 grid grid-cols-9">
+      <Tabs defaultValue="vscode" className="w-full">
+        <TabsList className="bg-transparent border-b border-zinc-800 rounded-none w-full justify-start gap-0 p-0 grid grid-cols-7">
           {allTabs.map(({ key, label, icon }) => (
             <TabsTrigger
               key={key}
@@ -155,13 +146,12 @@ export const Install = () => {
         </TabsContent>
 
         {/* Client Tabs Content */}
-        {clientTabs.map(({ key }) => (
+        {clientTabs.map(({ key, label }) => (
           <TabsContent key={key} value={key} className="mt-6">
             <Card className="bg-zinc-900 border-zinc-800">
               <CardHeader className="py-4">
                 <CardTitle className="text-white text-xl">
-                  {key.charAt(0).toUpperCase() + key.slice(1)} Installation
-                  Command
+                  {label} Installation Command
                 </CardTitle>
               </CardHeader>
               <hr className="border-zinc-800" />

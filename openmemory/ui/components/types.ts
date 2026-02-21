@@ -1,4 +1,4 @@
-export type Category = "personal" | "work" | "health" | "finance" | "travel" | "education" | "preferences" | "relationships"
+export type Category = string
 export type Client = "chrome" | "chatgpt" | "cursor" | "windsurf" | "terminal" | "api"
 
 export interface Memory {

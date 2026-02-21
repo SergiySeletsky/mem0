@@ -6,6 +6,7 @@ import { AnthropicLLM } from "../llms/anthropic";
 import { GroqLLM } from "../llms/groq";
 import { MistralLLM } from "../llms/mistral";
 import { MemoryVectorStore } from "../vector_stores/memory";
+import { MemgraphVectorStore } from "../vector_stores/memgraph";
 import {
   EmbeddingConfig,
   HistoryStoreConfig,
@@ -20,7 +21,8 @@ import { VectorizeDB } from "../vector_stores/vectorize";
 import { RedisDB } from "../vector_stores/redis";
 import { OllamaLLM } from "../llms/ollama";
 import { SupabaseDB } from "../vector_stores/supabase";
-import { SQLiteManager } from "../storage/SQLiteManager";
+import { MemgraphHistoryManager } from "../storage/MemgraphHistoryManager";
+import { KuzuHistoryManager } from "../storage/KuzuHistoryManager";
 import { MemoryHistoryManager } from "../storage/MemoryHistoryManager";
 import { SupabaseHistoryManager } from "../storage/SupabaseHistoryManager";
 import { HistoryManager } from "../storage/base";
@@ -134,6 +136,8 @@ export class VectorStoreFactory {
       case "chroma":
       case "chromadb":
         return new ChromaDBStore(config as any);
+      case "memgraph":
+        return new MemgraphVectorStore(config as any);
       default:
         throw new Error(`Unsupported vector store provider: ${provider}`);
     }
@@ -143,8 +147,10 @@ export class VectorStoreFactory {
 export class HistoryManagerFactory {
   static create(provider: string, config: HistoryStoreConfig): HistoryManager {
     switch (provider.toLowerCase()) {
-      case "sqlite":
-        return new SQLiteManager(config.config.historyDbPath || ":memory:");
+      case "memgraph":
+        return new MemgraphHistoryManager(config.config);
+      case "kuzu":
+        return new KuzuHistoryManager({ dbPath: config.config.dbPath });
       case "supabase":
         return new SupabaseHistoryManager({
           supabaseUrl: config.config.supabaseUrl || "",

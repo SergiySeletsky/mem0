@@ -29,7 +29,7 @@ export function RelatedMemories({ memoryId }: RelatedMemoriesProps) {
     };
 
     loadRelatedMemories();
-  }, []);
+  }, [memoryId]);
 
   if (isLoading) {
     return (

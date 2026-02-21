@@ -82,7 +82,8 @@ async function createMemory(overrides: any = {}) {
       provider: "openai",
       config: { apiKey: "test-key", model: "gpt-4" },
     },
-    historyDbPath: ":memory:",
+    // Use in-process history store so tests don't require a running Memgraph server
+    historyStore: { provider: "memory", config: {} },
     ...overrides,
   });
 }
@@ -95,8 +96,6 @@ describe("Memory Class (Unit)", () => {
     mockEmbedCreate.mockReset();
     memory = await createMemory();
     await memory.reset();
-    // Give the SQLite async init/reset a moment to fully settle
-    await new Promise((r) => setTimeout(r, 30));
   });
 
   // ============ Construction / Config ============

@@ -155,14 +155,14 @@ export class LangchainLLM implements LLM {
       if (typeof (runnable as any).bindTools === "function") {
         try {
           runnable = (runnable as any).bindTools(tools);
-        } catch (e) {}
-      } else {
+        } catch {
+          /* bindTools may not exist on all LangChain runnables; silently skip */
+        }
       }
     }
 
     // --- Invoke and Process Response ---
-    try {
-      const response = await runnable.invoke(langchainMessages, invokeOptions);
+    const response = await runnable.invoke(langchainMessages, invokeOptions);
 
       if (isStructuredOutput && !isToolCallResponse) {
         // Memory prompt with structured output
@@ -220,9 +220,6 @@ export class LangchainLLM implements LLM {
         // Fallback for unexpected formats
         return JSON.stringify(response);
       }
-    } catch (error) {
-      throw error;
-    }
   }
 
   async generateChat(messages: Message[]): Promise<LLMResponse> {

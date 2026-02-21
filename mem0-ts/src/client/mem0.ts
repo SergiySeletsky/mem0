@@ -319,7 +319,7 @@ export default class MemoryClient {
     }
 
     if (api_version === "v2") {
-      let url = paginated_response
+      const url = paginated_response
         ? `${this.host}/v2/memories/?${appendedParams}`
         : `${this.host}/v2/memories/`;
       return this._fetchWithErrorHandling(url, {
@@ -328,7 +328,7 @@ export default class MemoryClient {
         body: JSON.stringify(otherOptions),
       });
     } else {
-      // @ts-ignore
+      // @ts-expect-error — _prepareParams returns Record<string,any>; URLSearchParams accepts it at runtime
       const params = new URLSearchParams(this._prepareParams(otherOptions));
       const url = paginated_response
         ? `${this.host}/v1/memories/?${params}&${appendedParams}`
@@ -400,7 +400,7 @@ export default class MemoryClient {
       if (options.org_name) delete options.org_name;
       if (options.project_name) delete options.project_name;
     }
-    // @ts-ignore
+    // @ts-expect-error — _prepareParams returns Record<string,any>; URLSearchParams accepts it at runtime
     const params = new URLSearchParams(this._prepareParams(options));
     const response = await this._fetchWithErrorHandling(
       `${this.host}/v1/memories/?${params}`,
@@ -441,7 +441,7 @@ export default class MemoryClient {
       if (options.org_name) delete options.org_name;
       if (options.project_name) delete options.project_name;
     }
-    // @ts-ignore
+    // @ts-expect-error — MemoryOptions object is accepted by URLSearchParams at runtime
     const params = new URLSearchParams(options);
     const response = await this._fetchWithErrorHandling(
       `${this.host}/v1/entities/?${params}`,

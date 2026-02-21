@@ -7,7 +7,6 @@ import { RootState } from "@/store/store";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface AccessLogEntry {
-  id: string;
   app_name: string;
   accessed_at: string;
 }
@@ -35,7 +34,7 @@ export function AccessLog({ memoryId }: AccessLogProps) {
     };
 
     loadAccessLogs();
-  }, []);
+  }, [memoryId]);
 
   if (isLoading) {
     return (
@@ -70,7 +69,7 @@ export function AccessLog({ memoryId }: AccessLogProps) {
               constants.default;
 
             return (
-              <li key={entry.id} className="relative flex items-start gap-4">
+              <li key={index} className="relative flex items-start gap-4">
                 <div className="relative z-10 rounded-full overflow-hidden bg-[#2a2a2a] w-8 h-8 flex items-center justify-center flex-shrink-0">
                   {appConfig.iconImage ? (
                     <Image

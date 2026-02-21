@@ -6,7 +6,14 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "jest --runInBand",
+    "test:watch": "jest --watch --runInBand",
+    "test:e2e": "jest --config jest.e2e.config.ts --runInBand --forceExit",
+    "test:e2e:verbose": "jest --config jest.e2e.config.ts --runInBand --forceExit --verbose",
+    "test:pw": "playwright test",
+    "test:pw:ui": "playwright test --ui",
+    "test:pw:report": "playwright show-report"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
@@ -41,18 +48,16 @@
     "@reduxjs/toolkit": "^2.7.0",
     "autoprefixer": "^10.4.20",
     "axios": "^1.8.4",
-    "better-sqlite3": "^12.6.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "1.0.4",
     "date-fns": "4.1.0",
-    "drizzle-orm": "^0.45.1",
     "embla-carousel-react": "8.5.1",
     "input-otp": "1.4.1",
     "jszip": "^3.10.1",
     "lodash": "^4.17.21",
     "lucide-react": "^0.454.0",
-    "mem0ai": "workspace:../../mem0-ts",
+    "neo4j-driver": "^6.0.1",
     "next": "15.2.4",
     "next-themes": "^0.4.4",
     "openai": "^6.22.0",
@@ -73,29 +78,18 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
+    "@jest/globals": "^29.7.0",
+    "@playwright/test": "^1.58.2",
+    "@types/jest": "^29.5.14",
     "@types/jszip": "^3.4.1",
     "@types/lodash": "^4.17.16",
-    "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/uuid": "^11.0.0",
-    "dotenv": "^16.6.1",
-    "drizzle-kit": "^0.31.9",
+    "jest-environment-node": "^29.7.0",
     "postcss": "^8",
     "tailwindcss": "^3.4.17",
-    "tsx": "^4.21.0",
-    "typescript": "^5"
+    "tsx": "^4.21.0"
   },
-  "packageManager": "pnpm@10.5.2+sha512.da9dc28cd3ff40d0592188235ab25d3202add8a207afbedc682220e4a0029ffbff4562102b9e6e46b4e3f9e8bd53e6d05de48544b0c57d4b0179e22c76d1199b",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@parcel/watcher",
-      "sharp",
-      "better-sqlite3",
-      "esbuild",
-      "protobufjs",
-      "sqlite3"
-    ]
-  }
+  "packageManager": "pnpm@10.5.2+sha512.da9dc28cd3ff40d0592188235ab25d3202add8a207afbedc682220e4a0029ffbff4562102b9e6e46b4e3f9e8bd53e6d05de48544b0c57d4b0179e22c76d1199b"
 }

@@ -37,7 +37,6 @@ interface ApiResponse {
 }
 
 interface AccessLogEntry {
-  id: string;
   app_name: string;
   accessed_at: string;
 }
@@ -293,12 +292,18 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      await axios.post(`/api/v1/memories/actions/pause`, {
-        memory_ids: memoryIds,
-        all_for_app: true,
-        state: state,
-        user_id: user_id
-      });
+      if (state === 'archived') {
+        await axios.post(`/api/v1/memories/actions/archive`, {
+          memory_ids: memoryIds,
+          user_id: user_id
+        });
+      } else {
+        await axios.post(`/api/v1/memories/actions/pause`, {
+          memory_ids: memoryIds,
+          paused: state === 'paused',
+          user_id: user_id
+        });
+      }
       dispatch(setMemoriesSuccess(memories.map((memory: Memory) => {
         if (memoryIds.includes(memory.id)) {
           return { ...memory, state: state as "active" | "paused" | "archived" | "deleted" };

@@ -3,7 +3,6 @@ import { Memory } from '@/components/types';
 import { SimpleMemory } from '@/hooks/useMemoriesApi';
 
 interface AccessLogEntry {
-  id: string;
   app_name: string;
   accessed_at: string;
 }

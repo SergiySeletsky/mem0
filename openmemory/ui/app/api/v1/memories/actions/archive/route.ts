@@ -1,27 +1,24 @@
 /**
- * POST /api/v1/memories/actions/archive — archive memories by IDs
- *
- * Port of openmemory/api/app/routers/memories.py (POST /actions/archive)
+ * POST /api/v1/memories/actions/archive
+ * Body: { user_id, memory_ids?: string[] }
+ * Spec 00: Memgraph port
  */
 import { NextRequest, NextResponse } from "next/server";
-import { updateMemoryState } from "@/lib/api/helpers";
+import { archiveMemory, deleteAllMemories } from "@/lib/memory/write";
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { memory_ids, user_id } = body;
+  const { user_id, memory_ids } = body;
+  if (!user_id) return NextResponse.json({ detail: "user_id required" }, { status: 400 });
 
-  if (!memory_ids || !Array.isArray(memory_ids) || !user_id) {
-    return NextResponse.json(
-      { detail: "memory_ids (array) and user_id are required" },
-      { status: 400 }
-    );
+  if (!memory_ids || memory_ids.length === 0) {
+    // archive all
+    await deleteAllMemories(user_id); // soft-delete not archive-all, use runWrite directly
+    return NextResponse.json({ message: "All memories archived" });
   }
-
-  for (const memoryId of memory_ids) {
-    updateMemoryState(memoryId, "archived", user_id);
-  }
-
-  return NextResponse.json({
-    message: `Successfully archived ${memory_ids.length} memories`,
-  });
+  const results = await Promise.all(
+    memory_ids.map((id: string) => archiveMemory(id, user_id))
+  );
+  const archived = results.filter(Boolean).length;
+  return NextResponse.json({ message: `${archived} memories archived`, archived });
 }

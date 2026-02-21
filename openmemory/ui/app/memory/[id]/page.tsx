@@ -10,7 +10,7 @@ import UpdateMemory from "@/components/shared/update-memory";
 import { useUI } from "@/hooks/useUI";
 import { RootState } from "@/store/store";
 import { useSelector } from "react-redux";
-import NotFound from "@/app/not-found";
+import { ErrorDisplay } from "@/components/error-display";
 
 function MemoryContent({ id }: { id: string }) {
   const { fetchMemoryById, isLoading, error } = useMemoriesApi();
@@ -34,11 +34,11 @@ function MemoryContent({ id }: { id: string }) {
   }
 
   if (error) {
-    return <NotFound message={error} />;
+    return <ErrorDisplay message={error} />;
   }
 
   if (!memory) {
-    return <NotFound message="Memory not found" statusCode={404} />;
+    return <ErrorDisplay message="Memory not found" statusCode={404} />;
   }
 
   return <MemoryDetails memory_id={memory.id} />;

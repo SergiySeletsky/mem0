@@ -1,28 +1,10 @@
+export const dynamic = "force-dynamic";
+
 import "@/styles/notfound.scss";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 
-interface NotFoundProps {
-  statusCode?: number;
-  message?: string;
-  title?: string;
-}
-
-const getStatusCode = (message: string) => {
-  const possibleStatusCodes = ["404", "403", "500", "422"];
-  const potentialStatusCode = possibleStatusCodes.find((code) =>
-    message.includes(code)
-  );
-  return potentialStatusCode ? parseInt(potentialStatusCode) : undefined;
-};
-
-export default function NotFound({
-  statusCode,
-  message = "Page Not Found",
-  title,
-}: NotFoundProps) {
-  const potentialStatusCode = getStatusCode(message);
-
+export default function NotFound() {
   return (
     <div className="flex flex-col items-center justify-center h-[calc(100vh-100px)]">
       <div className="site">
@@ -31,12 +13,7 @@ export default function NotFound({
           <div className="bee-sketch blue"></div>
         </div>
         <h1>
-          {statusCode
-            ? `${statusCode}:`
-            : potentialStatusCode
-            ? `${potentialStatusCode}:`
-            : "404"}
-          <small>{title || message || "Page Not Found"}</small>
+          404<small>Page Not Found</small>
         </h1>
       </div>
 

@@ -1,3 +1,6 @@
-export { Reranker, extractDocText } from "./base";
-export { LLMReranker, LLMRerankerConfig } from "./llm";
-export { CohereReranker, CohereRerankerConfig } from "./cohere";
+export { extractDocText } from "./base";
+export type { Reranker } from "./base";
+export { LLMReranker } from "./llm";
+export type { LLMRerankerConfig } from "./llm";
+export { CohereReranker } from "./cohere";
+export type { CohereRerankerConfig } from "./cohere";

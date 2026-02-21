@@ -411,7 +411,7 @@ export class RedisDB implements VectorStore {
         return {
           id: doc.value.memory_id,
           payload: toCamelCase(resultPayload),
-          score: Number(doc.value.__vector_score) ?? 0,
+          score: Number(doc.value.__vector_score) || 0,
         };
       });
     } catch (error) {

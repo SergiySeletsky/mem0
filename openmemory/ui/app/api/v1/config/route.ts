@@ -1,47 +1,44 @@
 /**
- * GET /api/v1/config — get full configuration
- * PUT /api/v1/config — replace full configuration
- * PATCH /api/v1/config — partial update configuration
- *
- * Port of openmemory/api/app/routers/config.py (GET/PUT/PATCH /)
+ * GET/PUT/PATCH /api/v1/config
+ * Stores configuration as Config nodes in Memgraph.
+ * Spec 00: Memgraph port
  */
 import { NextRequest, NextResponse } from "next/server";
-import {
-  getConfigFromDb,
-  saveConfigToDb,
-  getDefaultConfiguration,
-  deepUpdate,
-} from "@/lib/config/helpers";
-import { resetMemoryClient } from "@/lib/mem0/client";
+import { runRead, runWrite } from "@/lib/db/memgraph";
+
+async function getConfig(): Promise<Record<string, any>> {
+  const rows = await runRead(
+    `MATCH (c:Config) RETURN c.key AS key, c.value AS value`,
+    {}
+  );
+  const result: Record<string, any> = {};
+  for (const r of rows as any[]) {
+    try { result[r.key] = JSON.parse(r.value); } catch { result[r.key] = r.value; }
+  }
+  return result;
+}
+
+async function setConfig(updates: Record<string, any>): Promise<void> {
+  for (const [key, value] of Object.entries(updates)) {
+    await runWrite(
+      `MERGE (c:Config {key: $key}) SET c.value = $value`,
+      { key, value: JSON.stringify(value) }
+    );
+  }
+}
 
 export async function GET() {
-  const config = getConfigFromDb();
-  return NextResponse.json(config);
+  return NextResponse.json(await getConfig());
 }
 
 export async function PUT(request: NextRequest) {
   const body = await request.json();
-  const current = getConfigFromDb();
-  const updated = { ...current };
-
-  if (body.openmemory) {
-    updated.openmemory = { ...updated.openmemory, ...body.openmemory };
-  }
-  if (body.mem0) {
-    updated.mem0 = body.mem0;
-  }
-
-  saveConfigToDb(updated);
-  resetMemoryClient();
-  return NextResponse.json(updated);
+  await setConfig(body);
+  return NextResponse.json(await getConfig());
 }
 
 export async function PATCH(request: NextRequest) {
   const body = await request.json();
-  const current = getConfigFromDb();
-  const updated = deepUpdate(current, body);
-
-  saveConfigToDb(updated);
-  resetMemoryClient();
-  return NextResponse.json(updated);
+  await setConfig(body);
+  return NextResponse.json(await getConfig());
 }

@@ -1,0 +1,40 @@
+/**
+ * lib/entities/extract.ts — LLM-based entity extraction (Spec 04)
+ *
+ * Given a memory string, returns a list of named entities with name, type, description.
+ * Fails open: any error returns [].
+ */
+import { getLLMClient } from "@/lib/ai/client";
+import { ENTITY_EXTRACTION_PROMPT } from "./prompts";
+
+export interface ExtractedEntity {
+  name: string;
+  type: string;
+  description: string;
+}
+
+export async function extractEntitiesFromMemory(
+  content: string
+): Promise<ExtractedEntity[]> {
+  const client = getLLMClient();
+  const model = process.env.LLM_AZURE_DEPLOYMENT ?? process.env.OPENMEMORY_CATEGORIZATION_MODEL ?? "gpt-4o-mini";
+
+  try {
+    const response = await client.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: ENTITY_EXTRACTION_PROMPT },
+        { role: "user", content: `Memory: ${content}` },
+      ],
+      temperature: 0,
+      max_tokens: 500,
+    });
+
+    const raw = (response.choices[0]?.message?.content ?? "{}").trim();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed.entities) ? parsed.entities : [];
+  } catch (e) {
+    console.warn("[entities/extract] failed:", e);
+    return [];
+  }
+}

@@ -3,30 +3,25 @@
  * POST /api/v1/memories — create a new memory
  * DELETE /api/v1/memories — bulk delete memories
  *
- * Port of openmemory/api/app/routers/memories.py (GET /, POST /, DELETE /)
+ * Spec 00: Memgraph port — replaces SQLite/Drizzle + mem0ai SDK
+ * Spec 01: Bi-temporal query params (include_superseded, as_of)
+ * Spec 02: search_query uses hybridSearch() instead of LIKE
+ * Spec 03: POST pre-write deduplication hook
+ * Spec 04: POST async entity extraction (fire-and-forget)
  */
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
-import {
-  memories,
-  apps,
-  categories,
-  memoryCategories,
-  memoryStatusHistory,
-  type MemoryState,
-} from "@/lib/db/schema";
-import { eq, and, ne, like, inArray, gte, lte, desc, asc, sql, count } from "drizzle-orm";
-import { getOrCreateUser, getOrCreateApp } from "@/lib/db/helpers";
-import { getMemoryClient } from "@/lib/mem0/client";
-import { categorizeMemory } from "@/lib/mem0/categorize";
-import { checkMemoryAccessPermissions } from "@/lib/permissions";
+import { runRead } from "@/lib/db/memgraph";
+import { addMemory, deleteMemory, supersedeMemory } from "@/lib/memory/write";
+import { listMemories } from "@/lib/memory/search";
+import { hybridSearch } from "@/lib/search/hybrid";
+import { checkDeduplication } from "@/lib/dedup";
+import { processEntityExtraction } from "@/lib/entities/worker";
 import {
   CreateMemoryRequestSchema,
   DeleteMemoriesRequestSchema,
   buildPageResponse,
   type MemoryResponse,
 } from "@/lib/validation";
-import { updateMemoryState } from "@/lib/api/helpers";
 
 // ---------- GET /api/v1/memories ----------
 export async function GET(request: NextRequest) {
@@ -36,103 +31,104 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ detail: "user_id is required" }, { status: 400 });
   }
 
-  const db = getDb();
-  const user = getOrCreateUser(userId);
-
-  const appIdFilter = sp.get("app_id");
-  const fromDate = sp.get("from_date") ? Number(sp.get("from_date")) : null;
-  const toDate = sp.get("to_date") ? Number(sp.get("to_date")) : null;
+  const appId = sp.get("app_id") ?? undefined;
   const categoriesParam = sp.get("categories");
-  const searchQuery = sp.get("search_query");
-  const sortColumn = sp.get("sort_column");
-  const sortDirection = sp.get("sort_direction");
+  const searchQuery = sp.get("search_query") ?? undefined;
   const page = Math.max(1, Number(sp.get("page") || "1"));
   const size = Math.min(100, Math.max(1, Number(sp.get("size") || "10")));
+  // Spec 01: bi-temporal query params
+  const includeSuperseeded = sp.get("include_superseded") === "true";
+  const asOf = sp.get("as_of") ?? undefined;
 
-  // Build conditions
-  const conditions: any[] = [
-    eq(memories.userId, user.id),
-    ne(memories.state, "deleted" as MemoryState),
-    ne(memories.state, "archived" as MemoryState),
-  ];
+  try {
+    // Spec 02: hybrid search when search_query is provided
+    if (searchQuery) {
+      const searchResults = await hybridSearch(searchQuery, {
+        userId,
+        topK: size * page, // fetch enough to cover requested page
+        mode: "hybrid",
+      });
+      if (searchResults.length === 0) {
+        return NextResponse.json(buildPageResponse([], 0, page, size));
+      }
+      const allIds = searchResults.map((r) => r.id);
+      const pageIds = allIds.slice((page - 1) * size, page * size);
 
-  if (searchQuery) {
-    conditions.push(like(memories.content, `%${searchQuery}%`));
-  }
-  if (appIdFilter) {
-    conditions.push(eq(memories.appId, appIdFilter));
-  }
-  if (fromDate) {
-    conditions.push(gte(memories.createdAt, new Date(fromDate * 1000).toISOString()));
-  }
-  if (toDate) {
-    conditions.push(lte(memories.createdAt, new Date(toDate * 1000).toISOString()));
-  }
+      const items: MemoryResponse[] = [];
+      for (const result of searchResults.filter((r) => pageIds.includes(r.id))) {
+        const catRows = await runRead<{ name: string }>(
+          `MATCH (m:Memory {id: $id})-[:HAS_CATEGORY]->(c:Category) RETURN c.name AS name`,
+          { id: result.id }
+        ).catch(() => []);
+        const catNames = catRows.map((c) => c.name);
 
-  // Count total
-  const totalResult = db
-    .select({ count: count() })
-    .from(memories)
-    .where(and(...conditions))
-    .get();
-  const total = totalResult?.count || 0;
+        if (categoriesParam) {
+          const catList = categoriesParam.split(",").map((c) => c.trim());
+          if (!catList.some((c) => catNames.includes(c))) continue;
+        }
 
-  // Query with joins
-  let orderBy = desc(memories.createdAt);
-  if (sortColumn === "created_at") {
-    orderBy = sortDirection === "asc" ? asc(memories.createdAt) : desc(memories.createdAt);
-  } else if (sortColumn === "memory") {
-    orderBy = sortDirection === "asc" ? asc(memories.content) : desc(memories.content);
-  }
-
-  const rows = db
-    .select()
-    .from(memories)
-    .where(and(...conditions))
-    .orderBy(orderBy)
-    .limit(size)
-    .offset((page - 1) * size)
-    .all();
-
-  // Build response items with categories and app name
-  const items: MemoryResponse[] = [];
-  for (const mem of rows) {
-    // Get app name
-    const app = db.select().from(apps).where(eq(apps.id, mem.appId)).get();
-
-    // Get categories
-    const cats = db
-      .select({ name: categories.name })
-      .from(memoryCategories)
-      .innerJoin(categories, eq(memoryCategories.categoryId, categories.id))
-      .where(eq(memoryCategories.memoryId, mem.id))
-      .all();
-
-    // Filter by category if requested
-    if (categoriesParam) {
-      const catList = categoriesParam.split(",").map((c) => c.trim());
-      const memCatNames = cats.map((c) => c.name);
-      if (!catList.some((c) => memCatNames.includes(c))) continue;
+        items.push({
+          id: result.id,
+          content: result.content,
+          created_at: result.createdAt
+            ? Math.floor(new Date(result.createdAt).getTime() / 1000)
+            : 0,
+          state: "active",
+          app_id: null,
+          app_name: result.appName || null,
+          categories: catNames,
+          metadata_: null,
+        });
+      }
+      return NextResponse.json(buildPageResponse(items, allIds.length, page, size));
     }
-
-    // Check permissions
-    if (!checkMemoryAccessPermissions(mem.state as MemoryState, mem.id, appIdFilter)) {
-      continue;
-    }
-
-    items.push({
-      id: mem.id,
-      content: mem.content,
-      created_at: mem.createdAt ? Math.floor(new Date(mem.createdAt).getTime() / 1000) : 0,
-      state: mem.state || "active",
-      app_id: mem.appId,
-      app_name: app?.name || null,
-      categories: cats.map((c) => c.name),
-      metadata_: mem.metadata as Record<string, unknown> | null,
+    const { memories, total } = await listMemories({
+      userId,
+      appName: appId,
+      page,
+      pageSize: size,
+      includeSuperseeded,
+      asOf,
     });
-  }
 
-  return NextResponse.json(buildPageResponse(items, total, page, size));
+    const items: MemoryResponse[] = [];
+    for (const mem of memories) {
+      const catRows = await runRead<{ name: string }>(
+        `MATCH (m:Memory {id: $id})-[:HAS_CATEGORY]->(c:Category) RETURN c.name AS name`,
+        { id: mem.id }
+      ).catch(() => []);
+
+      const catNames = catRows.map((c) => c.name);
+
+      if (categoriesParam) {
+        const catList = categoriesParam.split(",").map((c) => c.trim());
+        if (!catList.some((c) => catNames.includes(c))) continue;
+      }
+
+      const createdAtTs = mem.createdAt
+        ? Math.floor(new Date(mem.createdAt as string).getTime() / 1000)
+        : 0;
+
+      items.push({
+        id: mem.id,
+        content: mem.content,
+        created_at: createdAtTs,
+        state: mem.state || "active",
+        app_id: null,
+        app_name: mem.appName || null,
+        categories: catNames,
+        metadata_: mem.metadata ? JSON.parse(mem.metadata as string) : null,
+        valid_at: (mem as any).validAt || null,
+        invalid_at: (mem as any).invalidAt || null,
+        is_current: (mem as any).invalidAt == null,
+      });
+    }
+
+    return NextResponse.json(buildPageResponse(items, total, page, size));
+  } catch (e: any) {
+    console.error("GET /memories error:", e);
+    return NextResponse.json({ error: e.message }, { status: 500 });
+  }
 }
 
 // ---------- POST /api/v1/memories ----------
@@ -144,118 +140,60 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ detail: e.errors || e.message }, { status: 400 });
   }
 
-  const db = getDb();
-  const user = getOrCreateUser(body.user_id);
-
-  // Get or create app
-  let appObj = db
-    .select()
-    .from(apps)
-    .where(and(eq(apps.name, body.app), eq(apps.ownerId, user.id)))
-    .get();
-  if (!appObj) {
-    appObj = db.insert(apps).values({ ownerId: user.id, name: body.app }).returning().get();
-  }
-
-  if (!appObj.isActive) {
-    return NextResponse.json(
-      { detail: `App ${body.app} is currently paused on OpenMemory. Cannot create new memories.` },
-      { status: 403 }
-    );
-  }
-
-  // Get memory client
-  let memoryClient: any;
   try {
-    memoryClient = getMemoryClient();
-    if (!memoryClient) throw new Error("Memory client is not available");
-  } catch (clientError: any) {
-    return NextResponse.json({ error: clientError.message || String(clientError) });
-  }
-
-  // Save to vector store
-  try {
-    const qdrantResponse = await memoryClient.add(body.text, {
-      userId: body.user_id,
-      metadata: { source_app: "openmemory", mcp_client: body.app },
-      infer: body.infer,
-    });
-
-    if (qdrantResponse && typeof qdrantResponse === "object" && "results" in qdrantResponse) {
-      const createdMemories: any[] = [];
-
-      for (const result of qdrantResponse.results) {
-        // TypeScript SDK puts event in metadata.event; Python SDK puts it top-level
-        const event: string = result.event ?? result.metadata?.event ?? "";
-        const memoryId = result.id as string;
-
-        if (event === "ADD") {
-          const existing = db.select().from(memories).where(eq(memories.id, memoryId)).get();
-
-          if (existing) {
-            db.update(memories)
-              .set({ state: "active" as MemoryState, content: result.memory, updatedAt: new Date().toISOString() })
-              .where(eq(memories.id, memoryId))
-              .run();
-          } else {
-            db.insert(memories)
-              .values({
-                id: memoryId,
-                userId: user.id,
-                appId: appObj.id,
-                content: result.memory,
-                metadata: body.metadata || {},
-                state: "active" as MemoryState,
-              })
-              .run();
-          }
-
-          // History entry
-          db.insert(memoryStatusHistory)
-            .values({
-              memoryId,
-              changedBy: user.id,
-              oldState: "deleted" as MemoryState,
-              newState: "active" as MemoryState,
-            })
-            .run();
-
-          createdMemories.push(memoryId);
-
-          // Async categorization (fire-and-forget)
-          categorizeMemory(memoryId, result.memory).catch(() => {});
-        } else if (event === "UPDATE") {
-          const existing = db.select().from(memories).where(eq(memories.id, memoryId)).get();
-          if (existing) {
-            db.update(memories)
-              .set({ content: result.memory, updatedAt: new Date().toISOString() })
-              .where(eq(memories.id, memoryId))
-              .run();
-            db.insert(memoryStatusHistory)
-              .values({
-                memoryId,
-                changedBy: user.id,
-                oldState: existing.state as MemoryState,
-                newState: existing.state as MemoryState,
-              })
-              .run();
-          }
-          createdMemories.push(memoryId);
-        } else if (event === "DELETE") {
-          await updateMemoryState(memoryId, "deleted" as MemoryState, user.id);
-        }
-        // NONE: no change needed
-      }
-
-      if (createdMemories.length > 0) {
-        const first = db.select().from(memories).where(eq(memories.id, createdMemories[0])).get();
-        return NextResponse.json(first);
+    if (body.app) {
+      const appRows = await runRead<{ isActive: boolean }>(
+        `MATCH (u:User {userId: $userId})-[:HAS_APP]->(a:App {appName: $appName})
+         RETURN a.isActive AS isActive`,
+        { userId: body.user_id, appName: body.app }
+      );
+      if (appRows.length > 0 && appRows[0].isActive === false) {
+        return NextResponse.json(
+          { detail: `App ${body.app} is currently paused on OpenMemory. Cannot create new memories.` },
+          { status: 403 }
+        );
       }
     }
 
-    return NextResponse.json(qdrantResponse);
-  } catch (qdrantError: any) {
-    return NextResponse.json({ error: qdrantError.message || String(qdrantError) });
+    // Spec 03: Deduplication pre-write hook
+    const dedup = await checkDeduplication(body.text, body.user_id);
+
+    if (dedup.action === "skip") {
+      // Return the existing memory without writing a duplicate
+      const existing = await runRead(
+        `MATCH (m:Memory {id: $id}) RETURN m.id AS id, m.content AS content, m.state AS state, m.createdAt AS createdAt`,
+        { id: dedup.existingId }
+      );
+      return NextResponse.json({ ...(existing[0] ?? { id: dedup.existingId }), event: "SKIP_DUPLICATE" });
+    }
+
+    let id: string;
+    if (dedup.action === "supersede") {
+      id = await supersedeMemory(dedup.existingId, body.text, body.user_id, body.app);
+    } else {
+      id = await addMemory(body.text, {
+        userId: body.user_id,
+        appName: body.app,
+        metadata: body.metadata,
+      });
+    }
+
+    const rows = await runRead(
+      `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $id})
+       OPTIONAL MATCH (m)-[:CREATED_BY]->(a:App)
+       RETURN m.id AS id, m.content AS content, m.state AS state,
+              m.createdAt AS createdAt, m.metadata AS metadata,
+              a.appName AS appName`,
+      { userId: body.user_id, id }
+    );
+
+    // Spec 04: Async entity extraction — fire-and-forget, never blocks API response
+    processEntityExtraction(id).catch((e) => console.warn("[entity worker]", e));
+
+    return NextResponse.json(rows[0] ?? { id });
+  } catch (e: any) {
+    console.error("POST /memories error:", e);
+    return NextResponse.json({ error: e.message || String(e) }, { status: 500 });
   }
 }
 
@@ -268,27 +206,15 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ detail: e.errors || e.message }, { status: 400 });
   }
 
-  const user = getOrCreateUser(body.user_id);
-
-  let memoryClient: any;
   try {
-    memoryClient = getMemoryClient();
-    if (!memoryClient) throw new Error("Memory client is not available");
-  } catch (clientError: any) {
-    return NextResponse.json(
-      { detail: `Memory service unavailable: ${clientError.message}` },
-      { status: 503 }
-    );
-  }
-
-  for (const memoryId of body.memory_ids) {
-    try {
-      await memoryClient.delete(memoryId);
-    } catch (e: any) {
-      console.warn(`Failed to delete memory ${memoryId} from vector store:`, e);
+    let deletedCount = 0;
+    for (const memoryId of body.memory_ids) {
+      const ok = await deleteMemory(memoryId, body.user_id);
+      if (ok) deletedCount++;
     }
-    updateMemoryState(memoryId, "deleted", user.id);
+    return NextResponse.json({ message: `Successfully deleted ${deletedCount} memories` });
+  } catch (e: any) {
+    console.error("DELETE /memories error:", e);
+    return NextResponse.json({ error: e.message }, { status: 500 });
   }
-
-  return NextResponse.json({ message: `Successfully deleted ${body.memory_ids.length} memories` });
 }

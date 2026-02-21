@@ -1,67 +1,45 @@
 /**
- * GET /api/v1/apps/:appId/memories — list memories created by this app
- *
- * Port of openmemory/api/app/routers/apps.py (GET /{app_id}/memories)
+ * GET /api/v1/apps/:appId/memories
+ * Spec 00: Memgraph port
  */
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
-import { apps, memories, categories, memoryCategories, type MemoryState } from "@/lib/db/schema";
-import { eq, and, inArray, desc, count } from "drizzle-orm";
+import { runRead } from "@/lib/db/memgraph";
 
 type RouteParams = { params: Promise<{ appId: string }> };
 
 export async function GET(request: NextRequest, { params }: RouteParams) {
   const { appId } = await params;
-  const sp = request.nextUrl.searchParams;
-  const page = Math.max(1, Number(sp.get("page") || "1"));
-  const pageSize = Math.min(100, Math.max(1, Number(sp.get("page_size") || "10")));
+  const url = new URL(request.url);
+  const userId = url.searchParams.get("user_id");
+  const page = parseInt(url.searchParams.get("page") || "1", 10);
+  const pageSize = parseInt(url.searchParams.get("page_size") || "20", 10);
+  const skip = (page - 1) * pageSize;
 
-  const db = getDb();
-
-  const app = db.select().from(apps).where(eq(apps.id, appId)).get();
-  if (!app) {
-    return NextResponse.json({ detail: "App not found" }, { status: 404 });
-  }
-
-  const activeStates: MemoryState[] = ["active", "paused", "archived"];
-  const totalResult = db
-    .select({ count: count() })
-    .from(memories)
-    .where(and(eq(memories.appId, appId), inArray(memories.state, activeStates)))
-    .get();
-
-  const rows = db
-    .select()
-    .from(memories)
-    .where(and(eq(memories.appId, appId), inArray(memories.state, activeStates)))
-    .orderBy(desc(memories.createdAt))
-    .limit(pageSize)
-    .offset((page - 1) * pageSize)
-    .all();
-
-  const items = rows.map((mem) => {
-    const cats = db
-      .select({ name: categories.name })
-      .from(memoryCategories)
-      .innerJoin(categories, eq(memoryCategories.categoryId, categories.id))
-      .where(eq(memoryCategories.memoryId, mem.id))
-      .all();
-
-    return {
-      id: mem.id,
-      content: mem.content,
-      created_at: mem.createdAt,
-      state: mem.state || "active",
-      app_id: mem.appId,
-      categories: cats.map((c) => c.name),
-      metadata_: mem.metadata,
-    };
-  });
-
+  const userClause = userId ? `AND u.userId = $userId` : "";
+  const rows = await runRead(
+    `MATCH (u:User)-[:HAS_MEMORY]->(m:Memory)-[:CREATED_BY]->(a:App {appName: $appId})
+     WHERE m.state = 'active' ${userClause}
+     OPTIONAL MATCH (m)-[:HAS_CATEGORY]->(c:Category)
+     RETURN m.id AS id, m.content AS content, m.state AS state,
+            m.createdAt AS createdAt, m.metadata AS metadata,
+            collect(c.name) AS categories
+     ORDER BY m.createdAt DESC SKIP $skip LIMIT $limit`,
+    { appId, userId: userId || "", skip, limit: pageSize }
+  );
+  const countRows = await runRead(
+    `MATCH (:User)-[:HAS_MEMORY]->(m:Memory)-[:CREATED_BY]->(a:App {appName: $appId})
+     WHERE m.state = 'active' RETURN count(m) AS total`,
+    { appId }
+  );
+  const total = (countRows[0] as any)?.total ?? 0;
   return NextResponse.json({
-    total: totalResult?.count || 0,
-    page,
-    page_size: pageSize,
-    memories: items,
+    total, page, page_size: pageSize,
+    results: rows.map((r: any) => ({
+      id: r.id, content: r.content,
+      created_at: r.createdAt ? Math.floor(new Date(r.createdAt).getTime() / 1000) : 0,
+      state: r.state || "active", app_id: null, app_name: appId,
+      categories: r.categories || [],
+      metadata_: r.metadata ? JSON.parse(r.metadata) : null,
+    })),
   });
 }

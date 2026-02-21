@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MemoryCard } from "./components/MemoryCard";
 import AppDetailCard from "./components/AppDetailCard";
 import "@/styles/animation.css";
-import NotFound from "@/app/not-found";
+import { ErrorDisplay } from "@/components/error-display";
 import { AppDetailCardSkeleton } from "@/skeleton/AppDetailCardSkeleton";
 import { MemoryCardSkeleton } from "@/skeleton/MemoryCardSkeleton";
 
@@ -51,7 +51,7 @@ export default function AppDetailsPage() {
 
   if (selectedApp.error) {
     return (
-      <NotFound message={selectedApp.error} title="Error loading app details" />
+      <ErrorDisplay message={selectedApp.error} title="Error loading app details" />
     );
   }
 
@@ -92,7 +92,7 @@ export default function AppDetailsPage() {
 
     if (memories.error) {
       return (
-        <NotFound message={memories.error} title="Error loading memories" />
+        <ErrorDisplay message={memories.error} title="Error loading memories" />
       );
     }
 

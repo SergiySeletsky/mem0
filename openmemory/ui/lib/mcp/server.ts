@@ -1,25 +1,23 @@
 /**
- * MCP Server for OpenMemory — TypeScript port
+ * MCP Server for OpenMemory — Spec 00 Memgraph port
  *
  * Implements 5 MCP tools:
  *   add_memories, search_memory, list_memories, delete_memories, delete_all_memories
  *
  * Uses @modelcontextprotocol/sdk with SSE transport.
  * Context (user_id, client_name) is passed per-connection via the SSE URL path.
+ *
+ * Storage: Memgraph via lib/memory/write.ts + lib/memory/search.ts
+ * (replaces SQLite/Drizzle + mem0ai SDK dual-backend approach)
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getDb } from "@/lib/db";
-import {
-  memories,
-  memoryAccessLogs,
-  memoryStatusHistory,
-  type MemoryState,
-} from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
-import { getUserAndApp } from "@/lib/db/helpers";
-import { getMemoryClient } from "@/lib/mem0/client";
-import { checkMemoryAccessPermissions } from "@/lib/permissions";
+import { addMemory, deleteMemory, deleteAllMemories, supersedeMemory } from "@/lib/memory/write";
+import { searchMemories, listMemories } from "@/lib/memory/search";
+import { hybridSearch } from "@/lib/search/hybrid";
+import { runWrite } from "@/lib/db/memgraph";
+import { checkDeduplication } from "@/lib/dedup";
+import { processEntityExtraction } from "@/lib/entities/worker";
 
 /**
  * Create a new McpServer instance with all 5 tools registered.
@@ -33,16 +31,6 @@ const deleteMemoriesSchema = { memory_ids: z.array(z.string()) };
 export function createMcpServer(userId: string, clientName: string): McpServer {
   const server = new McpServer({ name: "mem0-mcp-server", version: "1.0.0" });
 
-  // Helper: safe memory client
-  function getMemoryClientSafe() {
-    try {
-      return getMemoryClient();
-    } catch (e) {
-      console.warn("Failed to get memory client:", e);
-      return null;
-    }
-  }
-
   // -------- add_memories --------
   server.registerTool(
     "add_memories",
@@ -54,95 +42,41 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
       if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
 
-      const memoryClient = getMemoryClientSafe();
-      if (!memoryClient) {
-        return { content: [{ type: "text", text: "Error: Memory system is currently unavailable." }] };
-      }
-
       try {
-        const db = getDb();
-        const { user, app } = getUserAndApp(userId, clientName);
+        const t0 = Date.now();
+        console.log(`[MCP] add_memories start for userId=${userId} text.length=${text.length}`);
 
-        if (!app.isActive) {
+        // Spec 03: Deduplication pre-write hook
+        const dedup = await checkDeduplication(text, userId);
+
+        if (dedup.action === "skip") {
+          console.log(`[MCP] add_memories dedup skip — duplicate of ${dedup.existingId}`);
           return {
-            content: [{ type: "text", text: `Error: App ${app.name} is currently paused on OpenMemory.` }],
+            content: [{ type: "text", text: JSON.stringify({ results: [{ id: dedup.existingId, memory: text, event: "SKIP_DUPLICATE" }] }) }],
           };
         }
 
-        // Wrap add() with a 45-second timeout — graph entity extraction via Azure LLM
-        // can take 10-30s; without a timeout the tool hangs indefinitely.
-        const ADD_TIMEOUT_MS = 45_000;
-        const t0 = Date.now();
-        console.log(`[MCP] add_memories start for userId=${userId} text.length=${text.length}`);
-        const addPromise = memoryClient.add(text, {
-          userId,
-          metadata: { source_app: "openmemory", mcp_client: clientName },
-        });
-        const addTimeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`add_memories timed out after ${ADD_TIMEOUT_MS / 1000}s`)), ADD_TIMEOUT_MS)
-        );
-        const response = await Promise.race([addPromise, addTimeoutPromise]);
-        console.log(`[MCP] add_memories done in ${Date.now() - t0}ms`);
-
-        if (response && typeof response === "object" && "results" in response) {
-          for (const result of (response as any).results) {
-            const memoryId = result.id as string;
-            // SDK puts event in metadata.event; handle both locations gracefully
-            const event: string = result.event ?? result.metadata?.event ?? "";
-            const existing = db.select().from(memories).where(eq(memories.id, memoryId)).get();
-
-            if (event === "ADD") {
-              if (!existing) {
-                db.insert(memories)
-                  .values({
-                    id: memoryId,
-                    userId: user.id,
-                    appId: app.id,
-                    content: result.memory,
-                    state: "active" as MemoryState,
-                  })
-                  .run();
-              } else {
-                db.update(memories)
-                  .set({ state: "active" as MemoryState, content: result.memory, updatedAt: new Date().toISOString() })
-                  .where(eq(memories.id, memoryId))
-                  .run();
-              }
-              db.insert(memoryStatusHistory)
-                .values({
-                  memoryId,
-                  changedBy: user.id,
-                  oldState: existing ? (existing.state as MemoryState) : ("deleted" as MemoryState),
-                  newState: "active" as MemoryState,
-                })
-                .run();
-            } else if (event === "UPDATE") {
-              if (existing) {
-                db.update(memories)
-                  .set({ content: result.memory, updatedAt: new Date().toISOString() })
-                  .where(eq(memories.id, memoryId))
-                  .run();
-              }
-            } else if (event === "DELETE") {
-              if (existing) {
-                db.update(memories)
-                  .set({ state: "deleted" as MemoryState, deletedAt: new Date().toISOString() })
-                  .where(eq(memories.id, memoryId))
-                  .run();
-                db.insert(memoryStatusHistory)
-                  .values({
-                    memoryId,
-                    changedBy: user.id,
-                    oldState: "active" as MemoryState,
-                    newState: "deleted" as MemoryState,
-                  })
-                  .run();
-              }
-            }
-          }
+        let id: string;
+        if (dedup.action === "supersede") {
+          console.log(`[MCP] add_memories dedup supersede — superseding ${dedup.existingId}`);
+          id = await supersedeMemory(dedup.existingId, text, userId, clientName);
+        } else {
+          id = await addMemory(text, {
+            userId,
+            appName: clientName,
+            metadata: { source_app: "openmemory", mcp_client: clientName },
+          });
         }
 
-        return { content: [{ type: "text", text: JSON.stringify(response) }] };
+        const event = dedup.action === "supersede" ? "SUPERSEDE" : "ADD";
+        console.log(`[MCP] add_memories done in ${Date.now() - t0}ms id=${id} event=${event}`);
+
+        // Spec 04: Async entity extraction — fire-and-forget, never blocks MCP response
+        processEntityExtraction(id).catch((e) => console.warn("[entity worker]", e));
+
+        return {
+          content: [{ type: "text", text: JSON.stringify({ results: [{ id, memory: text, event }] }) }],
+        };
       } catch (e: any) {
         console.error("Error adding memory:", e);
         return { content: [{ type: "text", text: `Error adding to memory: ${e.message}` }] };
@@ -161,74 +95,43 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
       if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
 
-      const memoryClient = getMemoryClientSafe();
-      if (!memoryClient) {
-        return { content: [{ type: "text", text: "Error: Memory system is currently unavailable." }] };
-      }
-
       try {
-        const db = getDb();
-        const { user, app } = getUserAndApp(userId, clientName);
-
-        // Get accessible memories
-        const userMems = db
-          .select()
-          .from(memories)
-          .where(eq(memories.userId, user.id))
-          .all();
-        const accessibleIds = new Set(
-          userMems
-            .filter((m) =>
-              checkMemoryAccessPermissions(m.state as MemoryState, m.id, app.id)
-            )
-            .map((m) => m.id)
-        );
-
-        // Search with a 30-second timeout — embedding (~2s) + vector search (~0.1s) run
-        // in parallel with graph LLM entity extraction (~10-15s) since SDK patch.
-        const SEARCH_TIMEOUT_MS = 30_000;
-        const t0search = Date.now();
+        const t0 = Date.now();
         console.log(`[MCP] search_memory start for userId=${userId} query="${query}"`);
-        const searchPromise = memoryClient.search(query, { userId });
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`search_memory timed out after ${SEARCH_TIMEOUT_MS / 1000}s`)), SEARCH_TIMEOUT_MS)
-        );
-        const searchResults: any = await Promise.race([searchPromise, timeoutPromise]);
-        console.log(`[MCP] search_memory done in ${Date.now() - t0search}ms`);
 
-        // SDK returns { results: MemoryItem[], relations?: GraphEntry[] }
-        const rawHits: any[] = Array.isArray(searchResults)
-          ? searchResults
-          : (searchResults?.results ?? []);
-        const graphRelations: any[] = searchResults?.relations ?? [];
+        // Spec 02: use hybrid search (text + vector + RRF) instead of vector-only
+        const results = await hybridSearch(query, {
+          userId,
+          topK: 10,
+          mode: "hybrid",
+        });
 
-        const results: any[] = [];
-        for (const h of rawHits) {
-          if (!h.id || !accessibleIds.has(h.id)) continue;
-          results.push({
-            id: h.id,
-            memory: h.memory || h.payload?.data,
-            score: h.score,
-            created_at: h.createdAt || h.created_at,
-            updated_at: h.updatedAt || h.updated_at,
-          });
-          db.insert(memoryAccessLogs)
-            .values({
-              memoryId: h.id,
-              appId: app.id,
-              accessType: "search",
-              metadata: { query, score: h.score },
-            })
-            .run();
+        console.log(`[MCP] search_memory done in ${Date.now() - t0}ms hits=${results.length}`);
+
+        // Log access for each hit
+        const now = new Date().toISOString();
+        for (const r of results) {
+          runWrite(
+            `MATCH (m:Memory {id: $id})
+             OPTIONAL MATCH (a:App {appName: $appName})
+             CREATE (m)-[:ACCESSED {at: $at, accessType: 'search', query: $query}]->(a)`,
+            { id: r.id, appName: clientName, at: now, query }
+          ).catch(() => {/* non-critical */});
         }
 
         return {
           content: [{
             type: "text",
-            text: JSON.stringify(
-              graphRelations.length > 0 ? { results, relations: graphRelations } : { results },
-              null, 2
-            ),
+            text: JSON.stringify({
+              results: results.map((r) => ({
+                id: r.id,
+                memory: r.content,
+                score: r.rrfScore,
+                text_rank: r.textRank,
+                vector_rank: r.vectorRank,
+                created_at: r.createdAt,
+              })),
+            }, null, 2),
           }],
         };
       } catch (e: any) {
@@ -248,53 +151,32 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
       if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
 
-      const memoryClient = getMemoryClientSafe();
-      if (!memoryClient) {
-        return { content: [{ type: "text", text: "Error: Memory system is currently unavailable." }] };
-      }
-
       try {
-        const db = getDb();
-        const { user, app } = getUserAndApp(userId, clientName);
-
-        // Wrap getAll() with a 30-second timeout just in case vector store is slow.
-        const GET_ALL_TIMEOUT_MS = 30_000;
-        const t0list = Date.now();
+        const t0 = Date.now();
         console.log(`[MCP] list_memories start for userId=${userId}`);
-        const getAllPromise = memoryClient.getAll({ userId });
-        const getAllTimeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`list_memories timed out after ${GET_ALL_TIMEOUT_MS / 1000}s`)), GET_ALL_TIMEOUT_MS)
-        );
-        const allMemories = await Promise.race([getAllPromise, getAllTimeoutPromise]);
-        console.log(`[MCP] list_memories SDK done in ${Date.now() - t0list}ms`);
-        const userMems = db.select().from(memories).where(eq(memories.userId, user.id)).all();
-        const accessibleIds = new Set(
-          userMems
-            .filter((m) =>
-              checkMemoryAccessPermissions(m.state as MemoryState, m.id, app.id)
-            )
-            .map((m) => m.id)
-        );
 
-        const filtered: any[] = [];
-        const memList = Array.isArray(allMemories)
-          ? allMemories
-          : (allMemories as any)?.results || [];
+        const { memories: mems } = await listMemories({
+          userId,
+          appName: clientName,
+          pageSize: 200,
+        });
 
-        for (const mem of memList) {
-          if (!mem.id || !accessibleIds.has(mem.id)) continue;
-          db.insert(memoryAccessLogs)
-            .values({
-              memoryId: mem.id,
-              appId: app.id,
-              accessType: "list",
-              metadata: { hash: mem.hash },
-            })
-            .run();
-          filtered.push(mem);
-        }
+        console.log(`[MCP] list_memories done in ${Date.now() - t0}ms count=${mems.length}`);
 
-        return { content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }] };
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(
+              mems.map((m) => ({
+                id: m.id,
+                memory: m.content,
+                created_at: m.createdAt,
+                updated_at: m.updatedAt,
+              })),
+              null, 2
+            ),
+          }],
+        };
       } catch (e: any) {
         console.error("Error listing memories:", e);
         return { content: [{ type: "text", text: `Error getting memories: ${e.message}` }] };
@@ -313,63 +195,17 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
       if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
 
-      const memoryClient = getMemoryClientSafe();
-      if (!memoryClient) {
-        return { content: [{ type: "text", text: "Error: Memory system is currently unavailable." }] };
-      }
-
       try {
-        const db = getDb();
-        const { user, app } = getUserAndApp(userId, clientName);
+        let deleted = 0;
+        for (const id of memory_ids) {
+          const ok = await deleteMemory(id, userId);
+          if (ok) deleted++;
+        }
 
-        const userMems = db.select().from(memories).where(eq(memories.userId, user.id)).all();
-        const accessibleIds = new Set(
-          userMems
-            .filter((m) =>
-              checkMemoryAccessPermissions(m.state as MemoryState, m.id, app.id)
-            )
-            .map((m) => m.id)
-        );
-
-        const idsToDelete = memory_ids.filter((id) => accessibleIds.has(id));
-        if (idsToDelete.length === 0) {
+        if (deleted === 0) {
           return { content: [{ type: "text", text: "Error: No accessible memories found with provided IDs" }] };
         }
-
-        const now = new Date().toISOString();
-        for (const memoryId of idsToDelete) {
-          try {
-            await memoryClient.delete(memoryId);
-          } catch (e) {
-            console.warn(`Failed to delete ${memoryId} from vector store:`, e);
-          }
-
-          const mem = db.select().from(memories).where(eq(memories.id, memoryId)).get();
-          if (mem) {
-            db.update(memories)
-              .set({ state: "deleted" as MemoryState, deletedAt: now })
-              .where(eq(memories.id, memoryId))
-              .run();
-            db.insert(memoryStatusHistory)
-              .values({
-                memoryId,
-                changedBy: user.id,
-                oldState: (mem.state || "active") as MemoryState,
-                newState: "deleted" as MemoryState,
-              })
-              .run();
-            db.insert(memoryAccessLogs)
-              .values({
-                memoryId,
-                appId: app.id,
-                accessType: "delete",
-                metadata: { operation: "delete_by_id" },
-              })
-              .run();
-          }
-        }
-
-        return { content: [{ type: "text", text: `Successfully deleted ${idsToDelete.length} memories` }] };
+        return { content: [{ type: "text", text: `Successfully deleted ${deleted} memories` }] };
       } catch (e: any) {
         console.error("Error deleting memories:", e);
         return { content: [{ type: "text", text: `Error deleting memories: ${e.message}` }] };
@@ -387,53 +223,9 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
       if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
 
-      const memoryClient = getMemoryClientSafe();
-      if (!memoryClient) {
-        return { content: [{ type: "text", text: "Error: Memory system is currently unavailable." }] };
-      }
-
       try {
-        const db = getDb();
-        const { user, app } = getUserAndApp(userId, clientName);
-
-        const userMems = db.select().from(memories).where(eq(memories.userId, user.id)).all();
-        const accessibleIds = userMems
-          .filter((m) =>
-            checkMemoryAccessPermissions(m.state as MemoryState, m.id, app.id)
-          )
-          .map((m) => m.id);
-
-        const now = new Date().toISOString();
-        for (const memoryId of accessibleIds) {
-          try {
-            await memoryClient.delete(memoryId);
-          } catch (e) {
-            console.warn(`Failed to delete ${memoryId} from vector store:`, e);
-          }
-
-          db.update(memories)
-            .set({ state: "deleted" as MemoryState, deletedAt: now })
-            .where(eq(memories.id, memoryId))
-            .run();
-          db.insert(memoryStatusHistory)
-            .values({
-              memoryId,
-              changedBy: user.id,
-              oldState: "active" as MemoryState,
-              newState: "deleted" as MemoryState,
-            })
-            .run();
-          db.insert(memoryAccessLogs)
-            .values({
-              memoryId,
-              appId: app.id,
-              accessType: "delete_all",
-              metadata: { operation: "bulk_delete" },
-            })
-            .run();
-        }
-
-        return { content: [{ type: "text", text: "Successfully deleted all memories" }] };
+        const count = await deleteAllMemories(userId, clientName);
+        return { content: [{ type: "text", text: `Successfully deleted ${count} memories` }] };
       } catch (e: any) {
         console.error("Error deleting memories:", e);
         return { content: [{ type: "text", text: `Error deleting memories: ${e.message}` }] };

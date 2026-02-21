@@ -109,16 +109,14 @@ export function MemoryDetails({ memory_id }: MemoryDetailsProps) {
                           Created by:
                         </span>
                         <div className="w-4 h-4 rounded-full bg-zinc-700 flex items-center justify-center overflow-hidden">
-                          <Image
-                            src={
-                              constants[
-                                memory?.app_name as keyof typeof constants
-                              ]?.iconImage || ""
-                            }
-                            alt="OpenMemory"
-                            width={24}
-                            height={24}
-                          />
+                          {constants[memory?.app_name as keyof typeof constants]?.iconImage && (
+                            <Image
+                              src={constants[memory?.app_name as keyof typeof constants].iconImage}
+                              alt="OpenMemory"
+                              width={24}
+                              height={24}
+                            />
+                          )}
                         </div>
                         <p className="text-sm text-zinc-100 font-semibold">
                           {
@@ -142,8 +140,8 @@ export function MemoryDetails({ memory_id }: MemoryDetailsProps) {
           </div>
         </div>
         <div className="w-1/3 flex flex-col gap-4">
-          <AccessLog memoryId={memory?.id || ""} />
-          <RelatedMemories memoryId={memory?.id || ""} />
+          <AccessLog memoryId={memory_id} />
+          <RelatedMemories memoryId={memory_id} />
         </div>
       </div>
     </div>

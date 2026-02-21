@@ -6,12 +6,8 @@ import {
   setConfigLoading,
   setConfigSuccess,
   setConfigError,
-  updateLLM,
-  updateEmbedder,
   updateMem0Config,
   updateOpenMemory,
-  LLMProvider,
-  EmbedderProvider,
   Mem0Config,
   OpenMemoryConfig
 } from '@/store/configSlice';
@@ -19,8 +15,6 @@ import {
 interface UseConfigApiReturn {
   fetchConfig: () => Promise<void>;
   saveConfig: (config: { openmemory?: OpenMemoryConfig; mem0: Mem0Config }) => Promise<void>;
-  saveLLMConfig: (llmConfig: LLMProvider) => Promise<void>;
-  saveEmbedderConfig: (embedderConfig: EmbedderProvider) => Promise<void>;
   resetConfig: () => Promise<void>;
   isLoading: boolean;
   error: string | null;
@@ -84,45 +78,9 @@ export const useConfig = (): UseConfigApiReturn => {
     }
   };
 
-  const saveLLMConfig = async (llmConfig: LLMProvider) => {
-    setIsLoading(true);
-    setError(null);
-    
-    try {
-      const response = await axios.put(`/api/v1/config/mem0/llm`, llmConfig);
-      dispatch(updateLLM(response.data));
-      setIsLoading(false);
-      return response.data;
-    } catch (err: any) {
-      const errorMessage = err.response?.data?.detail || err.message || 'Failed to save LLM configuration';
-      setError(errorMessage);
-      setIsLoading(false);
-      throw new Error(errorMessage);
-    }
-  };
-
-  const saveEmbedderConfig = async (embedderConfig: EmbedderProvider) => {
-    setIsLoading(true);
-    setError(null);
-    
-    try {
-      const response = await axios.put(`/api/v1/config/mem0/embedder`, embedderConfig);
-      dispatch(updateEmbedder(response.data));
-      setIsLoading(false);
-      return response.data;
-    } catch (err: any) {
-      const errorMessage = err.response?.data?.detail || err.message || 'Failed to save Embedder configuration';
-      setError(errorMessage);
-      setIsLoading(false);
-      throw new Error(errorMessage);
-    }
-  };
-
   return {
     fetchConfig,
     saveConfig,
-    saveLLMConfig,
-    saveEmbedderConfig,
     resetConfig,
     isLoading,
     error

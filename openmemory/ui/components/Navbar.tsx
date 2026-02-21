@@ -83,6 +83,7 @@ export function Navbar() {
   };
 
   const isActive = (href: string) => {
+    if (!pathname) return false;
     if (href === "/") return pathname === href;
     return pathname.startsWith(href.substring(0, 5));
   };

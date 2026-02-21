@@ -3,8 +3,8 @@
 # Base stage for common setup
 FROM node:18-alpine AS base
 
-# Install dependencies for pnpm and native modules (better-sqlite3)
-RUN apk add --no-cache libc6-compat curl python3 make g++ && \
+# Install dependencies for pnpm and native modules
+RUN apk add --no-cache libc6-compat curl && \
     corepack enable && \
     corepack prepare pnpm@latest --activate
 
@@ -23,9 +23,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/pnpm-lock.yaml ./pnpm-lock.yaml
 COPY . .
 
-# Use the main next.config.mjs which includes serverExternalPackages for
-# better-sqlite3, mem0ai, sqlite3 and webpack client-side fallbacks.
-# (Do NOT overwrite with next.config.dev.mjs — that lacks the merged config.)
+# Use the main next.config.mjs which externalises neo4j-driver and
+# adds webpack client-side fallbacks for server-only modules.
 
 # Build with placeholders so we can safely inject runtime values in the final image.
 # Next.js inlines NEXT_PUBLIC_* values at build time, so we must ensure the
@@ -44,14 +43,6 @@ RUN addgroup --system --gid 1001 nodejs && \
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-
-# Copy native better-sqlite3 bindings into standalone output
-COPY --from=builder /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
-COPY --from=builder /app/node_modules/bindings ./node_modules/bindings
-COPY --from=builder /app/node_modules/file-uri-to-path ./node_modules/file-uri-to-path
-
-# Create data directory for SQLite database
-RUN mkdir -p /app/data && chown -R nextjs:nodejs /app/data
 
 # `sed -i` creates temp files in the target directory; ensure /app is writable.
 RUN chown -R nextjs:nodejs /app

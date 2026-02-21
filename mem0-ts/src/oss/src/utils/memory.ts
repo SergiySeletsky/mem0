@@ -22,7 +22,7 @@ const get_image_description = async (image_url: string) => {
 const parse_vision_messages = async (messages: Message[]) => {
   const parsed_messages = [];
   for (const message of messages) {
-    let new_message = {
+    const new_message = {
       role: message.role,
       content: "",
     };

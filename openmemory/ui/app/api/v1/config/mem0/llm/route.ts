@@ -1,22 +1,11 @@
 /**
- * GET /api/v1/config/mem0/llm — get LLM config
- * PUT /api/v1/config/mem0/llm — update LLM config
+ * /api/v1/config/mem0/llm — removed.
+ * LLM is configured exclusively via environment variables (OPENAI_API_KEY, LLM_AZURE_*).
+ * This endpoint is no longer writable.
  */
-import { NextRequest, NextResponse } from "next/server";
-import { getConfigFromDb, saveConfigToDb } from "@/lib/config/helpers";
-import { resetMemoryClient } from "@/lib/mem0/client";
+import { NextResponse } from "next/server";
 
-export async function GET() {
-  const config = getConfigFromDb();
-  return NextResponse.json(config.mem0?.llm || {});
-}
+const MSG = { detail: "LLM configuration is managed via environment variables and cannot be changed at runtime." };
 
-export async function PUT(request: NextRequest) {
-  const body = await request.json();
-  const config = getConfigFromDb();
-  if (!config.mem0) config.mem0 = {} as any;
-  config.mem0.llm = body;
-  saveConfigToDb(config);
-  resetMemoryClient();
-  return NextResponse.json(config.mem0.llm);
-}
+export async function GET() { return NextResponse.json(MSG, { status: 410 }); }
+export async function PUT() { return NextResponse.json(MSG, { status: 410 }); }

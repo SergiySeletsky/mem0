@@ -36,7 +36,7 @@ export class CohereReranker implements Reranker {
     }
     // Lazy import cohere-ai
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy import keeps cohere-ai as an optional peer dep
       const { CohereClient } = require("cohere-ai");
       this.client = new CohereClient({ token: apiKey });
     } catch {

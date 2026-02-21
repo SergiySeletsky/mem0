@@ -42,17 +42,18 @@ const Stats = () => {
                 >
                   <div>
                     <div className="w-7 h-7 rounded-full bg-zinc-700 flex items-center justify-center overflow-hidden">
-                      <Image
-                        src={
-                          constants[app.name as keyof typeof constants]
-                            ?.iconImage || ""
-                        }
-                        alt={
-                          constants[app.name as keyof typeof constants]?.name
-                        }
-                        width={32}
-                        height={32}
-                      />
+                      {constants[app.name as keyof typeof constants]?.iconImage ? (
+                        <Image
+                          src={constants[app.name as keyof typeof constants]!.iconImage!}
+                          alt={constants[app.name as keyof typeof constants]?.name ?? app.name}
+                          width={32}
+                          height={32}
+                        />
+                      ) : (
+                        <span className="text-xs text-zinc-400">
+                          {app.name?.charAt(0)?.toUpperCase() ?? "?"}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>

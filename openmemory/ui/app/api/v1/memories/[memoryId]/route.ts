@@ -1,128 +1,100 @@
 /**
  * GET /api/v1/memories/:memoryId — get single memory
  * PUT /api/v1/memories/:memoryId — update memory text
- *
- * Port of openmemory/api/app/routers/memories.py (GET /{memory_id}, PUT /{memory_id})
+ * Spec 00: Memgraph port
+ * Spec 09: Namespace isolation — all queries anchored to User node
  */
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
-import { memories, apps, categories, memoryCategories, memoryStatusHistory, type MemoryState } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
-import { getOrCreateUser } from "@/lib/db/helpers";
-import { getMemoryOr404, updateMemoryState } from "@/lib/api/helpers";
-import { getMemoryClient } from "@/lib/mem0/client";
-import { categorizeMemory } from "@/lib/mem0/categorize";
+import { runRead } from "@/lib/db/memgraph";
+import { supersedeMemory } from "@/lib/memory/write";
 
 type RouteParams = { params: Promise<{ memoryId: string }> };
 
-// ---------- GET /api/v1/memories/:memoryId ----------
-export async function GET(_request: NextRequest, { params }: RouteParams) {
+export async function GET(request: NextRequest, { params }: RouteParams) {
   const { memoryId } = await params;
-  const db = getDb();
-
-  const mem = db.select().from(memories).where(eq(memories.id, memoryId)).get();
-  if (!mem) {
+  // Spec 09: require user_id for ownership verification
+  const userId =
+    request.nextUrl.searchParams.get("user_id") ??
+    request.headers.get("x-user-id") ??
+    null;
+  if (!userId || userId.trim() === "") {
+    return NextResponse.json({ detail: "user_id is required" }, { status: 400 });
+  }
+  // Spec 09: anchored traversal — Memory unreachable from wrong User returns [] → 404
+  const rows = await runRead(
+    `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memoryId})
+     OPTIONAL MATCH (m)-[:CREATED_BY]->(a:App)
+     OPTIONAL MATCH (m)-[:HAS_CATEGORY]->(c:Category)
+     OPTIONAL MATCH (newer:Memory)-[:SUPERSEDES]->(m)
+     RETURN m.id AS id, m.content AS content, m.state AS state,
+            m.createdAt AS createdAt, m.metadata AS metadata,
+            m.validAt AS validAt, m.invalidAt AS invalidAt,
+            a.appName AS appName, collect(c.name) AS categories,
+            newer.id AS supersededBy`,
+    { userId: userId.trim(), memoryId }
+  );
+  if (!rows.length) {
     return NextResponse.json({ detail: "Memory not found" }, { status: 404 });
   }
-
-  const app = db.select().from(apps).where(eq(apps.id, mem.appId)).get();
-  const cats = db
-    .select({ name: categories.name })
-    .from(memoryCategories)
-    .innerJoin(categories, eq(memoryCategories.categoryId, categories.id))
-    .where(eq(memoryCategories.memoryId, mem.id))
-    .all();
-
+  const r = rows[0] as any;
   return NextResponse.json({
-    id: mem.id,
-    text: mem.content,
-    created_at: mem.createdAt ? Math.floor(new Date(mem.createdAt).getTime() / 1000) : 0,
-    state: mem.state || "active",
-    app_id: mem.appId,
-    app_name: app?.name || null,
-    categories: cats.map((c) => c.name),
-    metadata_: mem.metadata as Record<string, unknown> | null,
+    id: r.id,
+    text: r.content,
+    created_at: r.createdAt ? Math.floor(new Date(r.createdAt).getTime() / 1000) : 0,
+    state: r.state || "active",
+    app_id: null,
+    app_name: r.appName || null,
+    categories: r.categories || [],
+    metadata_: r.metadata ? JSON.parse(r.metadata) : null,
+    valid_at: r.validAt || null,
+    invalid_at: r.invalidAt || null,
+    is_current: r.invalidAt == null,
+    superseded_by: r.supersededBy || null,
   });
 }
 
-// ---------- PUT /api/v1/memories/:memoryId ----------
 export async function PUT(request: NextRequest, { params }: RouteParams) {
   const { memoryId } = await params;
-  const db = getDb();
-
   const body = await request.json();
-  // Accept both "memory_content" (original Python API / UI hook) and "text" (TS API)
   const text = body.memory_content || body.text;
   const user_id = body.user_id;
+  const app_name = body.app_name || body.app || "openmemory";
   if (!text || !user_id) {
     return NextResponse.json({ detail: "text and user_id are required" }, { status: 400 });
   }
-
-  const user = getOrCreateUser(user_id);
-  const mem = db.select().from(memories).where(eq(memories.id, memoryId)).get();
-  if (!mem) {
+  // Spec 09: verify ownership — memory must belong to this user
+  const ownerCheck = await runRead(
+    `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memoryId}) RETURN m.id AS id`,
+    { userId: user_id, memoryId }
+  );
+  if (!ownerCheck.length) {
     return NextResponse.json({ detail: "Memory not found" }, { status: 404 });
   }
-
-  // Update in vector store
-  let memoryClient: any;
-  try {
-    memoryClient = getMemoryClient();
-    if (!memoryClient) throw new Error("Memory client is not available");
-  } catch (e: any) {
-    return NextResponse.json(
-      { detail: `Memory service unavailable: ${e.message}` },
-      { status: 503 }
-    );
-  }
-
-  try {
-    await memoryClient.update(memoryId, text);
-  } catch (e: any) {
-    console.error("Error updating memory in vector store:", e);
-    return NextResponse.json(
-      { detail: `Failed to update memory in vector store: ${e.message}` },
-      { status: 500 }
-    );
-  }
-
-  // Update local DB
-  db.update(memories)
-    .set({ content: text, updatedAt: new Date().toISOString() })
-    .where(eq(memories.id, memoryId))
-    .run();
-
-  // History entry
-  db.insert(memoryStatusHistory)
-    .values({
-      memoryId,
-      changedBy: user.id,
-      oldState: (mem.state || "active") as MemoryState,
-      newState: (mem.state || "active") as MemoryState,
-    })
-    .run();
-
-  // Re-categorize
-  categorizeMemory(memoryId, text).catch(() => {});
-
-  // Return updated
-  const updated = db.select().from(memories).where(eq(memories.id, memoryId)).get();
-  const app = db.select().from(apps).where(eq(apps.id, updated!.appId)).get();
-  const cats = db
-    .select({ name: categories.name })
-    .from(memoryCategories)
-    .innerJoin(categories, eq(memoryCategories.categoryId, categories.id))
-    .where(eq(memoryCategories.memoryId, memoryId))
-    .all();
-
+  // Spec 01: use temporal supersession instead of in-place update
+  const newId = await supersedeMemory(memoryId, text, user_id, app_name);
+  // Spec 09: anchored lookup of the just-created node
+  const rows = await runRead(
+    `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $id})
+     OPTIONAL MATCH (m)-[:CREATED_BY]->(a:App)
+     OPTIONAL MATCH (m)-[:HAS_CATEGORY]->(c:Category)
+     RETURN m.id AS id, m.content AS content, m.state AS state,
+            m.createdAt AS createdAt, m.validAt AS validAt,
+            m.metadata AS metadata,
+            a.appName AS appName, collect(c.name) AS categories`,
+    { userId: user_id, id: newId }
+  );
+  const r = (rows[0] as any) ?? { id: newId, content: text };
   return NextResponse.json({
-    id: updated!.id,
-    content: updated!.content,
-    created_at: updated!.createdAt ? Math.floor(new Date(updated!.createdAt).getTime() / 1000) : 0,
-    state: updated!.state || "active",
-    app_id: updated!.appId,
-    app_name: app?.name || null,
-    categories: cats.map((c) => c.name),
-    metadata_: updated!.metadata as Record<string, unknown> | null,
+    id: r.id ?? newId,
+    content: r.content ?? text,
+    created_at: r.createdAt ? Math.floor(new Date(r.createdAt).getTime() / 1000) : 0,
+    state: r.state || "active",
+    app_id: null,
+    app_name: r.appName || null,
+    categories: r.categories || [],
+    metadata_: r.metadata ? JSON.parse(r.metadata) : null,
+    valid_at: r.validAt || null,
+    invalid_at: null,
+    is_current: true,
   });
 }

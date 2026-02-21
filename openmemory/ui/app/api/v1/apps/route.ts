@@ -1,79 +1,34 @@
 /**
- * GET /api/v1/apps — list all apps with memory/access counts
- *
- * Port of openmemory/api/app/routers/apps.py (GET /)
+ * GET /api/v1/apps
+ * Query: user_id (required)
+ * Spec 00: Memgraph port
  */
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
-import { apps, memories, memoryAccessLogs, type MemoryState } from "@/lib/db/schema";
-import { eq, and, inArray, like, count, countDistinct, desc, asc, sql } from "drizzle-orm";
+import { runRead } from "@/lib/db/memgraph";
 
 export async function GET(request: NextRequest) {
-  const sp = request.nextUrl.searchParams;
-  const name = sp.get("name");
-  const isActive = sp.get("is_active");
-  const sortBy = sp.get("sort_by") || "name";
-  const sortDirection = sp.get("sort_direction") || "asc";
-  const page = Math.max(1, Number(sp.get("page") || "1"));
-  const pageSize = Math.min(100, Math.max(1, Number(sp.get("page_size") || "10")));
+  const url = new URL(request.url);
+  const userId = url.searchParams.get("user_id");
+  if (!userId) return NextResponse.json({ detail: "user_id required" }, { status: 400 });
 
-  const db = getDb();
-
-  // Get all apps with conditions
-  const conditions: any[] = [];
-  if (name) {
-    conditions.push(like(apps.name, `%${name}%`));
-  }
-  if (isActive !== null && isActive !== undefined) {
-    conditions.push(eq(apps.isActive, isActive === "true"));
-  }
-
-  const allApps = db
-    .select()
-    .from(apps)
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .all();
-
-  // For each app, compute memory count and access count
-  const activeStates: MemoryState[] = ["active", "paused", "archived"];
-  const items = allApps.map((app) => {
-    const memCount = db
-      .select({ count: count() })
-      .from(memories)
-      .where(and(eq(memories.appId, app.id), inArray(memories.state, activeStates)))
-      .get();
-
-    const accessCount = db
-      .select({ count: countDistinct(memoryAccessLogs.memoryId) })
-      .from(memoryAccessLogs)
-      .where(eq(memoryAccessLogs.appId, app.id))
-      .get();
-
-    return {
-      id: app.id,
-      name: app.name,
-      is_active: app.isActive,
-      total_memories_created: memCount?.count || 0,
-      total_memories_accessed: accessCount?.count || 0,
-    };
-  });
-
-  // Sort
-  items.sort((a, b) => {
-    let cmp = 0;
-    if (sortBy === "name") cmp = a.name.localeCompare(b.name);
-    else if (sortBy === "memories") cmp = a.total_memories_created - b.total_memories_created;
-    else if (sortBy === "memories_accessed") cmp = a.total_memories_accessed - b.total_memories_accessed;
-    return sortDirection === "desc" ? -cmp : cmp;
-  });
-
-  const total = items.length;
-  const paged = items.slice((page - 1) * pageSize, page * pageSize);
-
+  const rows = await runRead(
+    `MATCH (u:User {userId: $userId})-[:HAS_APP]->(a:App)
+     OPTIONAL MATCH (u)-[:HAS_MEMORY]->(m:Memory)-[:CREATED_BY]->(a)
+     WHERE m.state = 'active'
+     RETURN a.appName AS name, a.id AS id, a.isActive AS is_active,
+            a.createdAt AS created_at, count(m) AS memory_count`,
+    { userId }
+  );
   return NextResponse.json({
-    total,
-    page,
-    page_size: pageSize,
-    apps: paged,
+    apps: rows.map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      is_active: r.is_active !== false,
+      created_at: r.created_at,
+      memory_count: r.memory_count ?? 0,
+      total_memories_created: r.memory_count ?? 0,
+      total_memories_accessed: 0,
+    })),
+    total: rows.length,
   });
 }

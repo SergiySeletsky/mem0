@@ -31,7 +31,13 @@ export interface VectorStoreConfig {
 export interface HistoryStoreConfig {
   provider: string;
   config: {
-    historyDbPath?: string;
+    /** Memgraph / Neo4j connection URL (bolt://...) */
+    url?: string;
+    username?: string;
+    password?: string;
+    /** KuzuDB database path; omit or use ":memory:" for in-process in-memory store */
+    dbPath?: string;
+    /** Supabase */
     supabaseUrl?: string;
     supabaseKey?: string;
     tableName?: string;
@@ -45,6 +51,10 @@ export interface LLMConfig {
   apiKey?: string;
   model?: string | any;
   modelProperties?: Record<string, any>;
+  /** Per-request timeout in milliseconds (default 30000) */
+  timeout?: number;
+  /** Number of retries on network error (default 1) */
+  maxRetries?: number;
 }
 
 export interface Neo4jConfig {

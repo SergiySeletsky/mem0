@@ -1,13 +1,14 @@
-// @ts-nocheck
 import type { TelemetryClient, TelemetryOptions } from "./telemetry.types";
 
-let version = "2.1.36";
+const version = "2.1.36";
 
 // Safely check for process.env in different environments
 let MEM0_TELEMETRY = true;
 try {
   MEM0_TELEMETRY = process?.env?.MEM0_TELEMETRY === "false" ? false : true;
-} catch (error) {}
+} catch {
+  /* safe: process.env may not exist in restricted/edge environments */
+}
 const POSTHOG_API_KEY = "phc_hgJkUVJFYtmaJqrvf6CYN67TIQ8yhXAkWzUn9AMU4yX";
 const POSTHOG_HOST = "https://us.i.posthog.com/i/v0/e/";
 
@@ -73,7 +74,7 @@ const telemetry = new UnifiedTelemetry(POSTHOG_API_KEY, POSTHOG_HOST);
 async function captureClientEvent(
   eventName: string,
   instance: any,
-  additionalData = {},
+  additionalData: { keys?: string[]; [key: string]: unknown } = {},
 ) {
   if (!instance.telemetryId) {
     console.warn("No telemetry ID found for instance");

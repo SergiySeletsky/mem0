@@ -82,7 +82,8 @@ export const useAppsApi = (): UseAppsApiReturn => {
     try {
       const queryParams = new URLSearchParams({
         page: String(page),
-        page_size: String(page_size)
+        page_size: String(page_size),
+        user_id,
       });
 
       if (name) queryParams.append('name', name);

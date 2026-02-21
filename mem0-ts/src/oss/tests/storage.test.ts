@@ -1,39 +1,23 @@
 /// <reference types="jest" />
 /**
- * SQLiteManager unit tests.
+ * MemoryHistoryManager unit tests.
+ * Uses the zero-dependency in-memory implementation — no external services required.
  * Ported from Python tests/memory/test_storage.py.
- * Uses :memory: SQLite — no real files created.
  */
 
-import { SQLiteManager } from "../src/storage/SQLiteManager";
+import { MemoryHistoryManager } from "../src/storage/MemoryHistoryManager";
 
-// SQLiteManager initialises async in constructor; wait for it
-async function makeManager(path = ":memory:"): Promise<SQLiteManager> {
-  const m = new SQLiteManager(path);
-  // give the async init a tick to complete
-  await new Promise((r) => setTimeout(r, 20));
-  return m;
-}
+describe("MemoryHistoryManager", () => {
+  let manager: MemoryHistoryManager;
 
-describe("SQLiteManager", () => {
-  let manager: SQLiteManager;
-
-  beforeEach(async () => {
-    manager = await makeManager();
-  });
-
-  afterEach(() => {
-    manager.close();
+  beforeEach(() => {
+    manager = new MemoryHistoryManager();
   });
 
   // ========== Schema / Initialization ==========
 
   it("should create instance without throwing", () => {
     expect(manager).toBeDefined();
-  });
-
-  it("should expose a close() method", () => {
-    expect(typeof manager.close).toBe("function");
   });
 
   // ========== addHistory ==========
@@ -188,7 +172,6 @@ describe("SQLiteManager", () => {
       await manager.addHistory(`bulk-mem-${i}`, null, `Content ${i}`, "ADD", now);
     }
 
-    // Spot-check 5 random ones
     for (const i of [0, 49, 99, 149, 199]) {
       const rows = await manager.getHistory(`bulk-mem-${i}`);
       expect(rows).toHaveLength(1);

@@ -50,13 +50,13 @@ export function AppCard({ app }: AppCardProps) {
           <div>
             <p className="text-zinc-400 text-sm mb-1">Memories Created</p>
             <p className="text-xl font-medium">
-              {app.total_memories_created.toLocaleString()} Memories
+              {(app.total_memories_created ?? 0).toLocaleString()} Memories
             </p>
           </div>
           <div>
             <p className="text-zinc-400 text-sm mb-1">Memories Accessed</p>
             <p className="text-xl font-medium">
-              {app.total_memories_accessed.toLocaleString()} Memories
+              {(app.total_memories_accessed ?? 0).toLocaleString()} Memories
             </p>
           </div>
         </div>

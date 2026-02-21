@@ -1,11 +1,10 @@
 /**
- * Shared config helpers — get/save config from DB, default config
+ * Shared config helpers — reads/writes config from Memgraph Config nodes.
  *
- * Port of openmemory/api/app/routers/config.py (helper functions)
+ * Config nodes: (c:Config {key, value}) where value is a JSON string.
+ * Top-level keys: "openmemory" and "mem0".
  */
-import { getDb } from "@/lib/db";
-import { configs } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { runRead, runWrite } from "@/lib/db/memgraph";
 
 export function getDefaultConfiguration() {
   return {
@@ -13,33 +12,6 @@ export function getDefaultConfiguration() {
       custom_instructions: null as string | null,
     },
     mem0: {
-      llm: {
-        provider: "azure_openai",
-        config: {
-          model: "gpt-4.1-mini",
-          temperature: 0.1,
-          max_tokens: 2000,
-          azure_kwargs: {
-            api_key: "env:LLM_AZURE_OPENAI_API_KEY",
-            azure_endpoint: "env:LLM_AZURE_ENDPOINT",
-            azure_deployment: "env:LLM_AZURE_DEPLOYMENT",
-            api_version: "env:LLM_AZURE_API_VERSION",
-          },
-        },
-      },
-      embedder: {
-        provider: "azure_openai",
-        config: {
-          model: "text-embedding-3-small",
-          embedding_dims: 1536,
-          azure_kwargs: {
-            api_key: "env:EMBEDDING_AZURE_OPENAI_API_KEY",
-            azure_endpoint: "env:EMBEDDING_AZURE_ENDPOINT",
-            azure_deployment: "env:EMBEDDING_AZURE_DEPLOYMENT",
-            api_version: "env:EMBEDDING_AZURE_API_VERSION",
-          },
-        },
-      },
       vector_store: null as Record<string, unknown> | null,
     },
   };
@@ -47,46 +19,39 @@ export function getDefaultConfiguration() {
 
 export type AppConfig = ReturnType<typeof getDefaultConfiguration>;
 
-export function getConfigFromDb(key = "main"): AppConfig {
-  const db = getDb();
-  const row = db.select().from(configs).where(eq(configs.key, key)).get();
-
-  if (!row) {
-    const defaultConfig = getDefaultConfiguration();
-    db.insert(configs).values({ key, value: defaultConfig }).run();
-    return defaultConfig;
+/** Read full config from Memgraph, merging with defaults. */
+export async function getConfigFromDb(): Promise<AppConfig> {
+  try {
+    const rows = await runRead(
+      `MATCH (c:Config) RETURN c.key AS key, c.value AS value`,
+      {}
+    );
+    const result: Record<string, any> = {};
+    for (const r of rows as any[]) {
+      try {
+        result[r.key] = JSON.parse(r.value);
+      } catch {
+        result[r.key] = r.value;
+      }
+    }
+    const defaults = getDefaultConfiguration();
+    return {
+      openmemory: result.openmemory ?? defaults.openmemory,
+      mem0: result.mem0 ?? defaults.mem0,
+    };
+  } catch {
+    return getDefaultConfiguration();
   }
-
-  const configValue = row.value as any;
-  const defaultConfig = getDefaultConfiguration();
-
-  // Merge with defaults
-  if (!configValue.openmemory) configValue.openmemory = defaultConfig.openmemory;
-  if (!configValue.mem0) {
-    configValue.mem0 = defaultConfig.mem0;
-  } else {
-    if (!configValue.mem0.llm) configValue.mem0.llm = defaultConfig.mem0.llm;
-    if (!configValue.mem0.embedder) configValue.mem0.embedder = defaultConfig.mem0.embedder;
-    if (!("vector_store" in configValue.mem0))
-      configValue.mem0.vector_store = defaultConfig.mem0.vector_store;
-  }
-
-  return configValue;
 }
 
-export function saveConfigToDb(config: AppConfig, key = "main"): AppConfig {
-  const db = getDb();
-  const existing = db.select().from(configs).where(eq(configs.key, key)).get();
-
-  if (existing) {
-    db.update(configs)
-      .set({ value: config, updatedAt: new Date().toISOString() })
-      .where(eq(configs.key, key))
-      .run();
-  } else {
-    db.insert(configs).values({ key, value: config }).run();
+/** Persist config to Memgraph, one Config node per top-level key. */
+export async function saveConfigToDb(config: AppConfig): Promise<AppConfig> {
+  for (const [key, value] of Object.entries(config)) {
+    await runWrite(
+      `MERGE (c:Config {key: $key}) SET c.value = $value`,
+      { key, value: JSON.stringify(value) }
+    );
   }
-
   return config;
 }
 
@@ -105,4 +70,56 @@ export function deepUpdate(source: any, overrides: any): any {
     }
   }
   return source;
+}
+
+// ---------------------------------------------------------------------------
+// Dedup config — Spec 03
+// ---------------------------------------------------------------------------
+
+export interface DedupConfig {
+  enabled: boolean;
+  threshold: number; // cosine similarity threshold 0–1
+}
+
+/**
+ * Read dedup configuration from Memgraph config or return safe defaults.
+ * Keyed under openmemory.dedup in the config JSON.
+ */
+export async function getDedupConfig(): Promise<DedupConfig> {
+  try {
+    const raw = await getConfigFromDb() as any;
+    const dedupCfg = raw?.openmemory?.dedup ?? {};
+    return {
+      enabled: dedupCfg.enabled ?? true,
+      threshold: dedupCfg.threshold ?? 0.92,
+    };
+  } catch {
+    return { enabled: true, threshold: 0.92 };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Context window config — Spec 05
+// ---------------------------------------------------------------------------
+
+export interface ContextWindowConfig {
+  enabled: boolean;
+  size: number; // max memories to include as context (0 = disabled)
+}
+
+/**
+ * Read context window configuration from Memgraph config or return safe defaults.
+ * Keyed under openmemory.context_window in the config JSON.
+ */
+export async function getContextWindowConfig(): Promise<ContextWindowConfig> {
+  try {
+    const raw = await getConfigFromDb() as any;
+    const ctx = raw?.openmemory?.context_window ?? {};
+    return {
+      enabled: ctx.enabled ?? true,
+      size: Math.min(50, Math.max(0, ctx.size ?? 10)),
+    };
+  } catch {
+    return { enabled: true, size: 10 };
+  }
 }

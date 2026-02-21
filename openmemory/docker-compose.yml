@@ -1,15 +1,19 @@
 ## docker-compose.yml — Consolidated OpenMemory (merged UI + API)
 ##
 ## The Next.js app serves both the UI and the API.
-## The separate Python openmemory-mcp service has been removed.
+## Storage: Memgraph MAGE replaces both SQLite and Qdrant (Spec 00).
 
 services:
-  mem0_store:
-    image: qdrant/qdrant
+  memgraph:
+    image: memgraph/memgraph-mage:latest
     ports:
-      - "6333:6333"
+      - "7687:7687"   # Bolt protocol (neo4j-driver)
+      - "7444:7444"   # Memgraph Lab UI (optional, dev/debug)
     volumes:
-      - mem0_storage:/mem0/storage
+      - memgraph_data:/var/lib/memgraph
+    # --storage-properties-on-edges=true required for edge properties
+    # (SUPERSEDES.at, CREATED_BY.createdAt, HAS_CATEGORY.assignedAt, etc.)
+    command: ["--storage-properties-on-edges=true"]
 
   openmemory:
     build:
@@ -20,21 +24,15 @@ services:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_USER_ID=${USER:-local-user}
-      - DATABASE_PATH=/app/data/openmemory.db
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - QDRANT_URL=http://mem0_store:6333
-      # Optional: fast LLM for graph entity extraction (Groq ~100-200ms vs Azure ~3s)
-      # Get a free key at https://console.groq.com
-      - GROQ_API_KEY=${GROQ_API_KEY:-}
-      # Override graph LLM provider/model manually if needed:
-      # - GRAPH_LLM_PROVIDER=groq
-      # - GRAPH_LLM_MODEL=llama-3.1-8b-instant
-      # - GRAPH_LLM_API_KEY=gsk_...
+      - MEMGRAPH_URL=bolt://memgraph:7687
+      - MEMGRAPH_USER=${MEMGRAPH_USER:-}
+      - MEMGRAPH_PASSWORD=${MEMGRAPH_PASSWORD:-}
     depends_on:
-      - mem0_store
+      - memgraph
     volumes:
       - openmemory_data:/app/data
 
 volumes:
-  mem0_storage:
+  memgraph_data:
   openmemory_data:

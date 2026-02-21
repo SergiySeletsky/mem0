@@ -42,9 +42,11 @@ export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
     },
   },
   historyStore: {
-    provider: "sqlite",
+    provider: "memgraph",
     config: {
-      historyDbPath: "memory.db",
+      url: process.env.MEMGRAPH_URL || "bolt://localhost:7687",
+      username: process.env.MEMGRAPH_USER || "memgraph",
+      password: process.env.MEMGRAPH_PASSWORD || "memgraph",
     },
   },
 };

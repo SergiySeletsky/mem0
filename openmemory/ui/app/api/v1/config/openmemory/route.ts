@@ -1,22 +1,20 @@
 /**
- * GET /api/v1/config/openmemory — get OpenMemory-specific config
- * PUT /api/v1/config/openmemory — update OpenMemory-specific config
+ * GET/PUT /api/v1/config/openmemory
+ * Spec 00: Memgraph port
  */
 import { NextRequest, NextResponse } from "next/server";
-import { getConfigFromDb, saveConfigToDb } from "@/lib/config/helpers";
-import { resetMemoryClient } from "@/lib/mem0/client";
+import { runRead, runWrite } from "@/lib/db/memgraph";
+
+const CONFIG_KEY = "openmemory_config";
 
 export async function GET() {
-  const config = getConfigFromDb();
-  return NextResponse.json(config.openmemory || {});
+  const rows = await runRead(`MATCH (c:Config {key: $key}) RETURN c.value AS value`, { key: CONFIG_KEY });
+  if (!rows.length) return NextResponse.json({});
+  try { return NextResponse.json(JSON.parse((rows[0] as any).value)); } catch { return NextResponse.json({}); }
 }
 
 export async function PUT(request: NextRequest) {
   const body = await request.json();
-  const config = getConfigFromDb();
-  if (!config.openmemory) config.openmemory = {} as any;
-  Object.assign(config.openmemory, body);
-  saveConfigToDb(config);
-  resetMemoryClient();
-  return NextResponse.json(config.openmemory);
+  await runWrite(`MERGE (c:Config {key: $key}) SET c.value = $value`, { key: CONFIG_KEY, value: JSON.stringify(body) });
+  return NextResponse.json(body);
 }

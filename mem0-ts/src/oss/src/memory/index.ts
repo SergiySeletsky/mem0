@@ -101,9 +101,11 @@ export class Memory {
       this.db = new DummyHistoryManager();
     } else {
       const defaultConfig = {
-        provider: "sqlite",
+        provider: "memgraph",
         config: {
-          historyDbPath: this.config.historyDbPath || ":memory:",
+          url: process.env.MEMGRAPH_URL || "bolt://localhost:7687",
+          username: process.env.MEMGRAPH_USER || "memgraph",
+          password: process.env.MEMGRAPH_PASSWORD || "memgraph",
         },
       };
 
@@ -113,7 +115,7 @@ export class Memory {
               this.config.historyStore.provider,
               this.config.historyStore,
             )
-          : HistoryManagerFactory.create("sqlite", defaultConfig);
+          : HistoryManagerFactory.create("memgraph", defaultConfig);
     }
 
     this.collectionName = this.config.vectorStore.config.collectionName;
@@ -149,7 +151,9 @@ export class Memory {
         collection_name: this.collectionName,
         enable_graph: this.enableGraph,
       });
-    } catch (error) {}
+    } catch {
+      /* telemetry errors are intentionally swallowed to never block writes */
+    }
   }
 
   private async _getTelemetryId() {

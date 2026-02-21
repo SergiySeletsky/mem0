@@ -1,22 +1,11 @@
 /**
- * POST /api/v1/config/reset — reset to default configuration
- *
- * Port of openmemory/api/app/routers/config.py (POST /reset)
+ * POST /api/v1/config/reset
+ * Spec 00: Memgraph port
  */
 import { NextResponse } from "next/server";
-import { getDefaultConfiguration, saveConfigToDb } from "@/lib/config/helpers";
-import { resetMemoryClient } from "@/lib/mem0/client";
+import { runWrite } from "@/lib/db/memgraph";
 
 export async function POST() {
-  try {
-    const defaultConfig = getDefaultConfiguration();
-    saveConfigToDb(defaultConfig);
-    resetMemoryClient();
-    return NextResponse.json(defaultConfig);
-  } catch (e: any) {
-    return NextResponse.json(
-      { detail: `Failed to reset configuration: ${e.message}` },
-      { status: 500 }
-    );
-  }
+  await runWrite(`MATCH (c:Config) DELETE c`, {});
+  return NextResponse.json({ message: "Config reset to defaults" });
 }

@@ -11,10 +11,15 @@ export const MemoryResponseSchema = z.object({
   content: z.string(),
   created_at: z.number().int(),
   state: z.string(),
-  app_id: z.string().uuid(),
+  app_id: z.string().uuid().nullable(),
   app_name: z.string().nullable(),
   categories: z.array(z.string()),
   metadata_: z.record(z.string(), z.unknown()).nullable().optional(),
+  // Bi-temporal fields (Spec 01) -- optional for backward compat
+  valid_at: z.string().nullable().optional(),
+  invalid_at: z.string().nullable().optional(),
+  is_current: z.boolean().optional(),
+  superseded_by: z.string().nullable().optional(),
 });
 export type MemoryResponse = z.infer<typeof MemoryResponseSchema>;
 
