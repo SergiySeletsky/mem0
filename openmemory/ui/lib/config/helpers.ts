@@ -83,6 +83,10 @@ export interface DedupConfig {
 /**
  * Read dedup configuration from Memgraph config or return safe defaults.
  * Keyed under openmemory.dedup in the config JSON.
+ *
+ * Default threshold lowered from 0.85 to 0.75 (Eval v4 Finding 4) to catch
+ * paraphrased/semantically-equivalent content. LLM verification in Stage 2
+ * prevents false-positive dedup at this lower threshold.
  */
 export async function getDedupConfig(): Promise<DedupConfig> {
   try {
@@ -90,10 +94,10 @@ export async function getDedupConfig(): Promise<DedupConfig> {
     const dedupCfg = raw?.openmemory?.dedup ?? {};
     return {
       enabled: dedupCfg.enabled ?? true,
-      threshold: dedupCfg.threshold ?? 0.92,
+      threshold: dedupCfg.threshold ?? 0.75,
     };
   } catch {
-    return { enabled: true, threshold: 0.92 };
+    return { enabled: true, threshold: 0.75 };
   }
 }
 

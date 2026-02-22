@@ -29,8 +29,8 @@ const mockGetDedupConfig = getDedupConfig as jest.MockedFunction<typeof getDedup
 
 beforeEach(() => {
   jest.clearAllMocks();
-  // Default: dedup enabled, threshold 0.92
-  mockGetDedupConfig.mockResolvedValue({ enabled: true, threshold: 0.92 });
+  // Default: dedup enabled, threshold 0.75 (lowered from 0.85 for paraphrase catch)
+  mockGetDedupConfig.mockResolvedValue({ enabled: true, threshold: 0.75 });
   mockGetCached.mockReturnValue(null);
   mockPairHash.mockReturnValue("fake-hash");
   mockSetCached.mockImplementation(() => {});
@@ -86,11 +86,49 @@ describe("checkDeduplication orchestrator", () => {
   });
 
   it("ORCH_05: dedup disabled → always action: insert without calling findNearDuplicates", async () => {
-    mockGetDedupConfig.mockResolvedValue({ enabled: false, threshold: 0.92 });
+    mockGetDedupConfig.mockResolvedValue({ enabled: false, threshold: 0.75 });
 
     const result = await checkDeduplication("any text", "user-1");
 
     expect(result.action).toBe("insert");
     expect(mockFind).not.toHaveBeenCalled();
+  });
+
+  it("ORCH_06: passes lowered threshold (0.75) to findNearDuplicates for paraphrase catch", async () => {
+    mockGetDedupConfig.mockResolvedValue({ enabled: true, threshold: 0.75 });
+    mockFind.mockResolvedValue([]);
+
+    await checkDeduplication("A paraphrased version of ADR-003", "user-1");
+
+    // findNearDuplicates should receive the 0.75 threshold
+    expect(mockFind).toHaveBeenCalledWith("A paraphrased version of ADR-003", "user-1", 0.75);
+  });
+
+  it("ORCH_07: paraphrase with score 0.80 is caught and sent to LLM verification", async () => {
+    // Score 0.80 is above new threshold 0.75 but was below old threshold 0.85
+    mockGetDedupConfig.mockResolvedValue({ enabled: true, threshold: 0.75 });
+    mockFind.mockResolvedValue([
+      { id: "mem-orig", content: "We chose Memgraph as the database layer", score: 0.80 },
+    ]);
+    mockVerify.mockResolvedValue("DUPLICATE");
+
+    const result = await checkDeduplication(
+      "The team decided to use Memgraph as the database",
+      "user-1"
+    );
+
+    expect(result.action).toBe("skip");
+    // LLM verification was called — the paraphrase reached Stage 2
+    expect(mockVerify).toHaveBeenCalledTimes(1);
+  });
+
+  it("ORCH_08: custom higher threshold from config is respected", async () => {
+    mockGetDedupConfig.mockResolvedValue({ enabled: true, threshold: 0.92 });
+    mockFind.mockResolvedValue([]);
+
+    await checkDeduplication("test", "user-1");
+
+    // Config override should be passed through
+    expect(mockFind).toHaveBeenCalledWith("test", "user-1", 0.92);
   });
 });

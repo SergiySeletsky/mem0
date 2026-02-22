@@ -22,7 +22,7 @@ export interface DuplicateCandidate {
 export async function findNearDuplicates(
   text: string,
   userId: string,
-  threshold: number = 0.92,
+  threshold: number = 0.85,
   limit: number = 5
 ): Promise<DuplicateCandidate[]> {
   try {

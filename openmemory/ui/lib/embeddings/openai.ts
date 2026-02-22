@@ -1,37 +1,36 @@
 /**
  * Embedding generation — Spec 00
  *
- * Supports both standard OpenAI and Azure OpenAI embeddings.
- * Uses Azure when EMBEDDING_AZURE_OPENAI_API_KEY / EMBEDDING_AZURE_ENDPOINT are set,
- * otherwise falls back to OPENAI_API_KEY.
+ * Uses Azure AI Foundry exclusively via EMBEDDING_AZURE_OPENAI_API_KEY / EMBEDDING_AZURE_ENDPOINT.
+ * Direct OpenAI API access is not supported.
  *
- * Model: text-embedding-3-small (1536 dims, configurable via env)
+ * Model: text-embedding-3-small (1536 dims, configurable via EMBEDDING_AZURE_DEPLOYMENT)
  */
-import OpenAI, { AzureOpenAI } from "openai";
+import { AzureOpenAI } from "openai";
 
-let _client: OpenAI | null = null;
+let _client: AzureOpenAI | null = null;
 
-function getOpenAI(): OpenAI {
+function getOpenAI(): AzureOpenAI {
   if (!_client) {
     const azureKey = process.env.EMBEDDING_AZURE_OPENAI_API_KEY;
     const azureEndpoint = process.env.EMBEDDING_AZURE_ENDPOINT;
-    if (azureKey && azureEndpoint) {
-      _client = new AzureOpenAI({
-        apiKey: azureKey,
-        endpoint: azureEndpoint,
-        deployment: process.env.EMBEDDING_AZURE_DEPLOYMENT ?? "text-embedding-3-small",
-        apiVersion: process.env.EMBEDDING_AZURE_API_VERSION ?? "2024-02-01",
-      });
-    } else {
-      _client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    if (!azureKey || !azureEndpoint) {
+      throw new Error(
+        "Azure embedding credentials are required: set EMBEDDING_AZURE_OPENAI_API_KEY and EMBEDDING_AZURE_ENDPOINT"
+      );
     }
+    _client = new AzureOpenAI({
+      apiKey: azureKey,
+      endpoint: azureEndpoint,
+      deployment: process.env.EMBEDDING_AZURE_DEPLOYMENT ?? "text-embedding-3-small",
+      apiVersion: process.env.EMBEDDING_AZURE_API_VERSION ?? "2024-02-01",
+    });
   }
   return _client;
 }
 
 export const EMBED_MODEL =
   process.env.EMBEDDING_AZURE_DEPLOYMENT ??
-  process.env.OPENAI_EMBED_MODEL ??
   "text-embedding-3-small";
 export const EMBED_DIM = parseInt(process.env.EMBEDDING_DIMS ?? "1536", 10);
 

@@ -64,7 +64,7 @@ describe("SPEC 02: Text Search Wrapper", () => {
   });
 
   // -------------------------------------------------------------------------
-  test("TEXT_01: textSearch invokes text_search.search with the query string", async () => {
+  test("TEXT_01: textSearch invokes text_search.search_all with the query string", async () => {
     mockSession.run.mockResolvedValue({
       records: [makeRecord({ id: "m1" }), makeRecord({ id: "m2" })],
       summary: {},
@@ -74,8 +74,25 @@ describe("SPEC 02: Text Search Wrapper", () => {
     await textSearch("IBAN number", "alice");
 
     const cypher = allCypher();
-    expect(cypher).toContain("text_search.search");
+    expect(cypher).toContain("text_search.search_all");
     expect(cypher).toContain("memory_text");
+  });
+
+  // -------------------------------------------------------------------------
+  test("TEXT_01b: textSearch must NOT use text_search.search (requires Tantivy prefix)", async () => {
+    mockSession.run.mockResolvedValue({
+      records: [],
+      summary: {},
+    });
+
+    const { textSearch } = require("@/lib/search/text");
+    await textSearch("test", "alice");
+
+    const cypher = allCypher();
+    // search_all contains "search" as a substring, so we check there's no standalone search(
+    // Pattern: text_search.search( NOT followed by _all
+    const hasBareSearc = /text_search\.search\(/.test(cypher);
+    expect(hasBareSearc).toBe(false);
   });
 
   // -------------------------------------------------------------------------

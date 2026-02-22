@@ -13,7 +13,8 @@ services:
       - memgraph_data:/var/lib/memgraph
     # --storage-properties-on-edges=true required for edge properties
     # (SUPERSEDES.at, CREATED_BY.createdAt, HAS_CATEGORY.assignedAt, etc.)
-    command: ["--storage-properties-on-edges=true"]
+    # --experimental-enabled=text-search enables BM25 full-text search (Spec 02)
+    command: ["--storage-properties-on-edges=true", "--experimental-enabled=text-search"]
 
   openmemory:
     build:

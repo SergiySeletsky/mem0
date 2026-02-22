@@ -16,7 +16,7 @@ import { addMemory } from "@/lib/memory/write";
 jest.mock("@/lib/db/memgraph", () => ({ runRead: jest.fn(), runWrite: jest.fn() }));
 jest.mock("@/lib/embeddings/openai", () => ({ embed: jest.fn() }));
 jest.mock("@/lib/config/helpers", () => ({
-  getDedupConfig: jest.fn().mockResolvedValue({ enabled: false, threshold: 0.92 }),
+  getDedupConfig: jest.fn().mockResolvedValue({ enabled: false, threshold: 0.85 }),
   getContextWindowConfig: jest.fn(),
 }));
 

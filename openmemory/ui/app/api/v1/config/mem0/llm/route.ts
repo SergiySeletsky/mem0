@@ -1,6 +1,7 @@
 /**
  * /api/v1/config/mem0/llm — removed.
- * LLM is configured exclusively via environment variables (OPENAI_API_KEY, LLM_AZURE_*).
+ * LLM is configured exclusively via Azure AI Foundry environment variables
+ * (LLM_AZURE_OPENAI_API_KEY, LLM_AZURE_ENDPOINT, LLM_AZURE_DEPLOYMENT).
  * This endpoint is no longer writable.
  */
 import { NextResponse } from "next/server";

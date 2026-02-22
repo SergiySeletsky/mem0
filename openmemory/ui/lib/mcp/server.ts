@@ -1,56 +1,114 @@
 /**
  * MCP Server for OpenMemory — Spec 00 Memgraph port
  *
- * Implements 5 MCP tools:
- *   add_memories, search_memory, list_memories, delete_memories, delete_all_memories
+ * 10 MCP tools for agentic long-term memory, organized in two groups:
+ *
+ *   Core Memory:      add_memory, search_memory, list_memories, update_memory
+ *   Entity Knowledge:  search_memory_entities, get_memory_entity,
+ *                      get_memory_map, create_memory_relation,
+ *                      delete_memory_relation, delete_memory_entity
  *
  * Uses @modelcontextprotocol/sdk with SSE transport.
  * Context (user_id, client_name) is passed per-connection via the SSE URL path.
  *
  * Storage: Memgraph via lib/memory/write.ts + lib/memory/search.ts
- * (replaces SQLite/Drizzle + mem0ai SDK dual-backend approach)
+ * Search: hybrid BM25 + vector + Reciprocal Rank Fusion (lib/search/hybrid.ts)
+ * Knowledge: entity extraction + relationship graph (lib/entities/)
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { addMemory, deleteMemory, deleteAllMemories, supersedeMemory } from "@/lib/memory/write";
 import { searchMemories, listMemories } from "@/lib/memory/search";
 import { hybridSearch } from "@/lib/search/hybrid";
-import { runWrite } from "@/lib/db/memgraph";
+import { runRead, runWrite } from "@/lib/db/memgraph";
 import { checkDeduplication } from "@/lib/dedup";
 import { processEntityExtraction } from "@/lib/entities/worker";
+import { resolveEntity } from "@/lib/entities/resolve";
+import { embed } from "@/lib/embeddings/openai";
+import { randomUUID } from "crypto";
 
 /**
- * Create a new McpServer instance with all 5 tools registered.
+ * Create a new McpServer instance with all 10 memory tools registered.
  * Each request carries userId & clientName via closure.
  */
 // Pre-define tool input schemas to avoid TS2589 deep type instantiation
-const addMemoriesSchema = { text: z.string() };
-const searchMemorySchema = { query: z.string() };
-const deleteMemoriesSchema = { memory_ids: z.array(z.string()) };
+const addMemorySchema = { content: z.string().describe("The fact, preference, or information to remember") };
+const searchMemorySchema = {
+  query: z.string().describe("Natural language search query"),
+  limit: z.number().optional().describe("Maximum results to return (default: 10)"),
+  category: z.string().optional().describe("Filter to memories in this category only"),
+  created_after: z.string().optional().describe("ISO date — only return memories created after this date (e.g. '2026-02-01')"),
+};
+const updateMemorySchema = {
+  memory_id: z.string().describe("ID of the existing memory to update"),
+  new_text: z.string().describe("The updated content that replaces the old memory"),
+};
+
+// Entity & Knowledge tool schemas
+const searchMemoryEntitiesSchema = {
+  query: z.string().describe("Name, keyword, or description fragment to search for across remembered entities. Use specific name fragments (e.g. 'Alice', 'Memgraph') for best results; general concepts also work via description matching."),
+  entity_type: z.string().optional().describe("Filter by entity type: PERSON, ORGANIZATION, LOCATION, CONCEPT, PRODUCT, or OTHER"),
+  limit: z.number().optional().describe("Maximum number of entities to return (default: 10)"),
+};
+
+const listMemoriesSchema = {
+  limit: z.number().optional().describe("Maximum number of memories to return (default: 50, max: 200)"),
+  offset: z.number().optional().describe("Number of memories to skip for pagination (default: 0)"),
+  category: z.string().optional().describe("Filter to memories in this category only"),
+};
+
+const getMemoryEntitySchema = {
+  entity_id: z.string().describe("The unique ID of the entity to retrieve"),
+};
+
+const getRelatedMemoriesSchema = {
+  entity_name: z.string().describe("The name of the entity to search for (e.g. 'PaymentService')"),
+};
+
+const getMemoryMapSchema = {
+  entity_id: z.string().describe("The entity ID to build the knowledge map around"),
+  depth: z.number().optional().describe("How many hops from center to include (default: 1, max: 3)"),
+  limit: z.number().optional().describe("Maximum number of entities in the map (default: 50)"),
+  max_edges: z.number().optional().describe("Maximum number of edges to return (default: 100). Prevents large responses."),
+};
+const createMemoryRelationSchema = {
+  source_entity: z.string().describe("Name of the source entity (e.g. 'Alice')"),
+  relationship_type: z.string().describe("Type of relationship in UPPER_SNAKE_CASE (e.g. WORKS_AT, KNOWS, USES, LIVES_IN)"),
+  target_entity: z.string().describe("Name of the target entity (e.g. 'Acme Corp')"),
+  description: z.string().optional().describe("Optional context or details about this relationship"),
+};
+const deleteMemoryRelationSchema = {
+  source_entity: z.string().describe("Name of the source entity"),
+  relationship_type: z.string().describe("The relationship type to remove (e.g. WORKS_AT)"),
+  target_entity: z.string().describe("Name of the target entity"),
+};
+const deleteMemoryEntitySchema = {
+  entity_id: z.string().describe("The unique ID of the entity to permanently remove"),
+};
 
 export function createMcpServer(userId: string, clientName: string): McpServer {
   const server = new McpServer({ name: "mem0-mcp-server", version: "1.0.0" });
 
-  // -------- add_memories --------
+  // -------- add_memory --------
   server.registerTool(
-    "add_memories",
+    "add_memory",
     {
-      description: "Add a new memory. Called when the user shares personal info, preferences, or asks to remember something.",
-      inputSchema: addMemoriesSchema,
+      description: "Save information to long-term memory. Call this when the user shares personal details, preferences, goals, decisions, or explicitly asks you to remember something. Supports automatic deduplication — existing memories are updated rather than duplicated.",
+      inputSchema: addMemorySchema,
     },
-    async ({ text }) => {
+    async ({ content: text }) => {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
       if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
 
       try {
         const t0 = Date.now();
-        console.log(`[MCP] add_memories start for userId=${userId} text.length=${text.length}`);
+        console.log(`[MCP] add_memory start for userId=${userId} text.length=${text.length}`);
 
         // Spec 03: Deduplication pre-write hook
         const dedup = await checkDeduplication(text, userId);
 
         if (dedup.action === "skip") {
-          console.log(`[MCP] add_memories dedup skip — duplicate of ${dedup.existingId}`);
+          console.log(`[MCP] add_memory dedup skip — duplicate of ${dedup.existingId}`);
           return {
             content: [{ type: "text", text: JSON.stringify({ results: [{ id: dedup.existingId, memory: text, event: "SKIP_DUPLICATE" }] }) }],
           };
@@ -58,7 +116,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
 
         let id: string;
         if (dedup.action === "supersede") {
-          console.log(`[MCP] add_memories dedup supersede — superseding ${dedup.existingId}`);
+          console.log(`[MCP] add_memory dedup supersede — superseding ${dedup.existingId}`);
           id = await supersedeMemory(dedup.existingId, text, userId, clientName);
         } else {
           id = await addMemory(text, {
@@ -69,7 +127,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         }
 
         const event = dedup.action === "supersede" ? "SUPERSEDE" : "ADD";
-        console.log(`[MCP] add_memories done in ${Date.now() - t0}ms id=${id} event=${event}`);
+        console.log(`[MCP] add_memory done in ${Date.now() - t0}ms id=${id} event=${event}`);
 
         // Spec 04: Async entity extraction — fire-and-forget, never blocks MCP response
         processEntityExtraction(id).catch((e) => console.warn("[entity worker]", e));
@@ -88,30 +146,41 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
   server.registerTool(
     "search_memory",
     {
-      description: "Search through stored memories. Called EVERY TIME the user asks anything.",
+      description: "Search memories using natural language. Uses hybrid retrieval (semantic similarity + keyword matching) for best results. Call this proactively to personalize responses — check for relevant context before answering questions about the user's preferences, history, or prior conversations.",
       inputSchema: searchMemorySchema,
     },
-    async ({ query }) => {
+    async ({ query, limit, category, created_after }) => {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
       if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
 
       try {
         const t0 = Date.now();
-        console.log(`[MCP] search_memory start for userId=${userId} query="${query}"`);
+        const effectiveLimit = limit ?? 10;
+        console.log(`[MCP] search_memory start for userId=${userId} query="${query}" limit=${effectiveLimit}`);
 
         // Spec 02: use hybrid search (text + vector + RRF) instead of vector-only
         const results = await hybridSearch(query, {
           userId,
-          topK: 10,
+          topK: effectiveLimit,
           mode: "hybrid",
         });
 
-        console.log(`[MCP] search_memory done in ${Date.now() - t0}ms hits=${results.length}`);
+        // Apply optional post-filters (category, date)
+        let filtered = results;
+        if (category) {
+          const catLower = category.toLowerCase();
+          filtered = filtered.filter(r => r.categories.some(c => c.toLowerCase() === catLower));
+        }
+        if (created_after) {
+          filtered = filtered.filter(r => r.createdAt >= created_after);
+        }
+
+        console.log(`[MCP] search_memory done in ${Date.now() - t0}ms hits=${results.length} filtered=${filtered.length}`);
 
         // Log access for each hit — batch write to avoid concurrent MERGE races
-        if (results.length > 0) {
+        if (filtered.length > 0) {
           const now = new Date().toISOString();
-          const ids = results.map(r => r.id);
+          const ids = filtered.map(r => r.id);
           runWrite(
             `MERGE (a:App {appName: $appName})
              WITH a
@@ -126,14 +195,36 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
           content: [{
             type: "text",
             text: JSON.stringify({
-              results: results.map((r) => ({
-                id: r.id,
-                memory: r.content,
-                score: r.rrfScore,
-                text_rank: r.textRank,
-                vector_rank: r.vectorRank,
-                created_at: r.createdAt,
-              })),
+              // Relevance confidence indicator (Eval v4 Finding 3)
+              // When no BM25 matches and all RRF scores are below threshold,
+              // flag results as low-confidence so agents can decide whether to show them.
+              ...(filtered.length > 0 ? (() => {
+                const hasAnyTextHit = filtered.some(r => r.textRank !== null);
+                const maxScore = Math.max(...filtered.map(r => r.rrfScore));
+                // Confident when at least one BM25 hit exists, or when top RRF score
+                // is above the single-arm threshold (1/(K+1) ≈ 0.0164 for K=60).
+                const confident = hasAnyTextHit || maxScore > 0.02;
+                return { 
+                  confident,
+                  message: confident 
+                    ? "Found relevant results." 
+                    : "Found some results, but confidence is LOW. These might not be relevant to your query."
+                };
+              })() : { confident: true, message: "No results found." }),
+              results: filtered.map((r) => {
+                // Normalize RRF score to 0-1 range. Max possible RRF score is ~0.03278 (1/61 + 1/61)
+                const normalizedScore = Math.min(1.0, Math.round((r.rrfScore / 0.032786) * 100) / 100);
+                return {
+                  id: r.id,
+                  memory: r.content,
+                  relevance_score: normalizedScore,
+                  raw_score: r.rrfScore,
+                  text_rank: r.textRank,
+                  vector_rank: r.vectorRank,
+                  created_at: r.createdAt,
+                  categories: r.categories,
+                };
+              }),
             }, null, 2),
           }],
         };
@@ -148,36 +239,68 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
   server.registerTool(
     "list_memories",
     {
-      description: "List all memories in the user's memory",
+      description: "Retrieve stored memories, most recent first. Use when the user wants to review everything you remember, or when you need a broad overview rather than a targeted search. Supports pagination via limit/offset.",
+      inputSchema: listMemoriesSchema,
     },
-    async () => {
+    async ({ limit, offset, category }) => {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
       if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
 
       try {
         const t0 = Date.now();
-        console.log(`[MCP] list_memories start for userId=${userId}`);
+        const effectiveLimit = Math.min(limit ?? 50, 200);
+        const effectiveOffset = offset ?? 0;
+        console.log(`[MCP] list_memories start for userId=${userId} limit=${effectiveLimit} offset=${effectiveOffset} category=${category}`);
 
-        const { memories: mems } = await listMemories({
-          userId,
-          appName: clientName,
-          pageSize: 200,
-        });
+        // Get total count
+        const countRows = await runRead<{ total: number }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)
+           WHERE m.invalidAt IS NULL AND m.state <> 'deleted'
+           ${category ? `MATCH (m)-[:HAS_CATEGORY]->(cFilter:Category) WHERE toLower(cFilter.name) = toLower($category)` : ''}
+           RETURN count(m) AS total`,
+          { userId, category }
+        );
+        const total = countRows[0]?.total ?? 0;
 
-        console.log(`[MCP] list_memories done in ${Date.now() - t0}ms count=${mems.length}`);
+        // Get paginated memories with categories
+        const rows = await runRead<{
+          id: string;
+          content: string;
+          createdAt: string;
+          updatedAt: string;
+          categories: string[];
+        }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)
+           WHERE m.invalidAt IS NULL AND m.state <> 'deleted'
+           ${category ? `MATCH (m)-[:HAS_CATEGORY]->(cFilter:Category) WHERE toLower(cFilter.name) = toLower($category)` : ''}
+           OPTIONAL MATCH (m)-[:HAS_CATEGORY]->(c:Category)
+           WITH m, collect(c.name) AS categories
+           ORDER BY m.createdAt DESC
+           SKIP $offset
+           LIMIT $limit
+           RETURN m.id AS id, m.content AS content,
+                  m.createdAt AS createdAt, m.updatedAt AS updatedAt,
+                  categories`,
+          { userId, offset: effectiveOffset, limit: effectiveLimit, category }
+        );
+
+        console.log(`[MCP] list_memories done in ${Date.now() - t0}ms count=${rows.length} total=${total}`);
 
         return {
           content: [{
             type: "text",
-            text: JSON.stringify(
-              mems.map((m) => ({
+            text: JSON.stringify({
+              total,
+              offset: effectiveOffset,
+              limit: effectiveLimit,
+              memories: rows.map((m) => ({
                 id: m.id,
                 memory: m.content,
                 created_at: m.createdAt,
                 updated_at: m.updatedAt,
+                categories: m.categories ?? [],
               })),
-              null, 2
-            ),
+            }, null, 2),
           }],
         };
       } catch (e: any) {
@@ -187,53 +310,699 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
     }
   );
 
-  // -------- delete_memories --------
+  // -------- update_memory --------
   server.registerTool(
-    "delete_memories",
+    "update_memory",
     {
-      description: "Delete specific memories by their IDs",
-      inputSchema: deleteMemoriesSchema,
+      description:
+        "Update an existing memory with new content. The old version is preserved in history (bi-temporal model) " +
+        "and the new content replaces it as the current version. Use when a previously stored fact has changed — " +
+        "e.g. the user changed jobs, moved cities, switched tech stacks, or corrected earlier information.",
+      inputSchema: updateMemorySchema,
     },
-    async ({ memory_ids }) => {
-      if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
-      if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
+    async ({ memory_id, new_text }) => {
+      if (!userId) return { content: [{ type: "text" as const, text: "Error: user_id not provided" }] };
 
       try {
-        let deleted = 0;
-        for (const id of memory_ids) {
-          const ok = await deleteMemory(id, userId);
-          if (ok) deleted++;
+        const t0 = Date.now();
+        console.log(`[MCP] update_memory start for userId=${userId} memoryId=${memory_id}`);
+
+        // Verify old memory exists and belongs to user
+        const oldRows = await runRead<{ content: string }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memoryId})
+           WHERE m.invalidAt IS NULL
+           RETURN m.content AS content`,
+          { userId, memoryId: memory_id },
+        );
+
+        if (oldRows.length === 0) {
+          return { content: [{ type: "text" as const, text: "Error: Memory not found or already superseded" }] };
         }
 
-        if (deleted === 0) {
-          return { content: [{ type: "text", text: "Error: No accessible memories found with provided IDs" }] };
+        // Use bi-temporal supersede — old memory preserved with invalidAt, new one linked via [:SUPERSEDES]
+        const newId = await supersedeMemory(memory_id, new_text, userId, clientName);
+
+        console.log(`[MCP] update_memory done in ${Date.now() - t0}ms old=${memory_id} new=${newId}`);
+
+        // Async entity extraction on new version — fire-and-forget
+        processEntityExtraction(newId).catch((e) => console.warn("[entity worker]", e));
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              updated: {
+                old_id: memory_id,
+                new_id: newId,
+                old_content: oldRows[0].content,
+                new_content: new_text,
+              },
+              message: "Memory updated — old version preserved in history",
+            }, null, 2),
+          }],
+        };
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("Error in update_memory:", msg);
+        return { content: [{ type: "text" as const, text: `Error updating memory: ${msg}` }] };
+      }
+    },
+  );
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Entity & Knowledge tools — structured memory via entities & relations
+  // ────────────────────────────────────────────────────────────────────────
+
+  // -------- search_memory_entities --------
+  server.registerTool(
+    "search_memory_entities",
+    {
+      description:
+        "Find people, organizations, places, concepts, or products mentioned across memories. " +
+        "Searches by name substring match AND semantic similarity on entity descriptions. " +
+        "Returns matching entities with their type and how many memories reference them. " +
+        "Use when tracing who or what the user has discussed — e.g. 'which people have I mentioned?' or 'what technologies do I use?'",
+      inputSchema: searchMemoryEntitiesSchema,
+    },
+    async ({ query, entity_type, limit }) => {
+      if (!userId) return { content: [{ type: "text" as const, text: "Error: user_id not provided" }] };
+
+      try {
+        const effectiveLimit = limit ?? 10;
+        const typeClause = entity_type ? "AND e.type = $entityType" : "";
+        const params: Record<string, unknown> = { userId, query: query.toLowerCase(), limit: effectiveLimit };
+        if (entity_type) params.entityType = entity_type.toUpperCase();
+
+        // Arm 1: Substring match on name/description (existing behavior)
+        const substringRows = await runRead<{
+          id: string; name: string; type: string;
+          description: string | null; memoryCount: number;
+        }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity)
+           WHERE (toLower(e.name) CONTAINS $query
+                  OR (e.description IS NOT NULL AND toLower(e.description) CONTAINS $query))
+                 ${typeClause}
+           OPTIONAL MATCH (m:Memory)-[:MENTIONS]->(e)
+           WHERE m.invalidAt IS NULL
+           WITH e, count(m) AS memoryCount
+           RETURN e.id AS id, e.name AS name, e.type AS type,
+                  e.description AS description, memoryCount
+           ORDER BY memoryCount DESC
+           LIMIT $limit`,
+          params,
+        );
+
+        // Arm 2: Semantic match — embed query, compute cosine similarity against entity descriptions
+        let semanticRows: typeof substringRows = [];
+        try {
+          const queryEmbedding = await embed(query);
+          const semanticParams: Record<string, unknown> = {
+            userId,
+            embedding: queryEmbedding,
+            limit: effectiveLimit,
+          };
+          if (entity_type) semanticParams.entityType = entity_type.toUpperCase();
+          const semanticTypeClause = entity_type ? "AND e.type = $entityType" : "";
+
+          semanticRows = await runRead<{
+            id: string; name: string; type: string;
+            description: string | null; memoryCount: number;
+          }>(
+            `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity)
+             WHERE e.descriptionEmbedding IS NOT NULL ${semanticTypeClause}
+             WITH e, vector.similarity.cosine(e.descriptionEmbedding, $embedding) AS similarity
+             WHERE similarity > 0.3
+             OPTIONAL MATCH (m:Memory)-[:MENTIONS]->(e)
+             WHERE m.invalidAt IS NULL
+             WITH e, count(m) AS memoryCount, similarity
+             ORDER BY similarity DESC
+             LIMIT $limit
+             RETURN e.id AS id, e.name AS name, e.type AS type,
+                    e.description AS description, memoryCount`,
+            semanticParams,
+          );
+        } catch {
+          // Semantic arm is best-effort — vector similarity may not be available
+          // on Entity nodes if embeddings haven't been computed yet
         }
-        return { content: [{ type: "text", text: `Successfully deleted ${deleted} memories` }] };
+
+        // Merge results: deduplicate by id, substring matches first, then semantic
+        const seen = new Set<string>();
+        const merged: typeof substringRows = [];
+        for (const row of [...substringRows, ...semanticRows]) {
+          if (!seen.has(row.id)) {
+            seen.add(row.id);
+            merged.push(row);
+          }
+        }
+
+        const finalRows = merged.slice(0, effectiveLimit);
+        console.log(`[MCP] search_memory_entities query="${query}" substring=${substringRows.length} semantic=${semanticRows.length} merged=${finalRows.length}`);
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({ nodes: finalRows }, null, 2),
+          }],
+        };
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("Error in search_memory_entities:", msg);
+        return { content: [{ type: "text" as const, text: `Error searching memory entities: ${msg}` }] };
+      }
+    },
+  );
+
+  // -------- get_memory_entity --------
+  server.registerTool(
+    "get_memory_entity",
+    {
+      description:
+        "Get the complete profile of a known entity — its type, description, every memory that mentions it, " +
+        "connected entities (co-occurrence), and explicit relationships. " +
+        "Use when the user asks about a specific person, company, project, " +
+        "or concept and you need full context from memory.",
+      inputSchema: getMemoryEntitySchema,
+    },
+    async ({ entity_id }) => {
+      if (!userId) return { content: [{ type: "text" as const, text: "Error: user_id not provided" }] };
+
+      try {
+        // Get entity details
+        const entityRows = await runRead<{
+          id: string; name: string; type: string;
+          description: string | null; createdAt: string;
+        }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity {id: $entityId})
+           RETURN e.id AS id, e.name AS name, e.type AS type,
+                  e.description AS description, e.createdAt AS createdAt`,
+          { userId, entityId: entity_id },
+        );
+
+        if (entityRows.length === 0) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Entity not found" }) }] };
+        }
+
+        // Get memories mentioning this entity (most recent first)
+        const memRows = await runRead<{
+          id: string; content: string; createdAt: string;
+        }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity {id: $entityId})
+           MATCH (m:Memory)-[:MENTIONS]->(e)
+           WHERE m.invalidAt IS NULL
+           RETURN m.id AS id, m.content AS content, m.createdAt AS createdAt
+           ORDER BY m.createdAt DESC
+           LIMIT 20`,
+          { userId, entityId: entity_id },
+        );
+
+        // Get connected entities (co-occurrence)
+        const connectedRows = await runRead<{
+          id: string; name: string; type: string; weight: number;
+        }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(center:Entity {id: $entityId})
+           MATCH (m:Memory)-[:MENTIONS]->(center)
+           WHERE m.invalidAt IS NULL
+           MATCH (m)-[:MENTIONS]->(other:Entity)<-[:HAS_ENTITY]-(u)
+           WHERE other.id <> center.id
+           WITH other, count(DISTINCT m) AS weight
+           RETURN other.id AS id, other.name AS name, other.type AS type, weight
+           ORDER BY weight DESC
+           LIMIT 10`,
+          { userId, entityId: entity_id },
+        );
+
+        // Get explicit RELATED_TO relationships (both directions)
+        const relRows = await runRead<{
+          sourceName: string; relType: string;
+          targetName: string; targetType: string;
+          description: string | null;
+        }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(center:Entity {id: $entityId})
+           MATCH (center)-[r:RELATED_TO]->(tgt:Entity)<-[:HAS_ENTITY]-(u)
+           RETURN center.name AS sourceName, r.relType AS relType,
+                  tgt.name AS targetName, tgt.type AS targetType,
+                  r.description AS description
+           UNION ALL
+           MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(center:Entity {id: $entityId})
+           MATCH (u)-[:HAS_ENTITY]->(src:Entity)-[r:RELATED_TO]->(center)
+           RETURN src.name AS sourceName, r.relType AS relType,
+                  center.name AS targetName, center.type AS targetType,
+                  r.description AS description`,
+          { userId, entityId: entity_id },
+        );
+
+        const entity = entityRows[0];
+        console.log(`[MCP] get_memory_entity id=${entity_id} memories=${memRows.length} connected=${connectedRows.length} relations=${relRows.length}`);
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              entity: {
+                id: entity.id,
+                name: entity.name,
+                type: entity.type,
+                description: entity.description,
+                createdAt: entity.createdAt,
+              },
+              memories: memRows.map((m) => ({
+                id: m.id,
+                content: m.content,
+                createdAt: m.createdAt,
+              })),
+              connectedEntities: connectedRows,
+              relationships: relRows.map((r) => ({
+                source: r.sourceName,
+                type: r.relType,
+                target: r.targetName,
+                targetType: r.targetType,
+                description: r.description,
+              })),
+            }, null, 2),
+          }],
+        };
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("Error in get_memory_entity:", msg);
+        return { content: [{ type: "text" as const, text: `Error getting memory entity: ${msg}` }] };
+      }
+    },
+  );
+
+  // -------- get_related_memories --------
+  server.registerTool(
+    "get_related_memories",
+    {
+      description: "Natural language entity graph traversal. Finds an entity by name and returns all memories mentioning it, plus its explicit relationships to other entities. Use this to quickly understand everything known about a specific component, person, or concept.",
+      inputSchema: getRelatedMemoriesSchema,
+    },
+    async ({ entity_name }) => {
+      if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
+
+      try {
+        // 1. Resolve the entity by name (using the same logic as entity extraction)
+        const entityId = await resolveEntity({ name: entity_name, type: "OTHER", description: "" }, userId);
+
+        // 1.5 Get entity details
+        const entityRows = await runRead<{
+          id: string; name: string; type: string; description: string | null;
+        }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity {id: $entityId})
+           RETURN e.id AS id, e.name AS name, e.type AS type, e.description AS description`,
+          { userId, entityId }
+        );
+        const entity = entityRows[0];
+
+        // 2. Get memories mentioning this entity
+        const memRows = await runRead<{
+          id: string; content: string; createdAt: string;
+        }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity {id: $entityId})
+           MATCH (m:Memory)-[:HAS_ENTITY]->(e)
+           WHERE m.invalidAt IS NULL
+           RETURN m.id AS id, m.content AS content, m.createdAt AS createdAt
+           ORDER BY m.createdAt DESC
+           LIMIT 20`,
+          { userId, entityId },
+        );
+
+        // 3. Get explicit RELATED_TO relationships
+        const relRows = await runRead<{
+          sourceName: string; relType: string;
+          targetName: string; targetType: string;
+          description: string | null;
+        }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(center:Entity {id: $entityId})
+           MATCH (center)-[r:RELATED_TO]->(tgt:Entity)<-[:HAS_ENTITY]-(u)
+           RETURN center.name AS sourceName, r.relType AS relType,
+                  tgt.name AS targetName, tgt.type AS targetType,
+                  r.description AS description
+           UNION ALL
+           MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(center:Entity {id: $entityId})
+           MATCH (u)-[:HAS_ENTITY]->(src:Entity)-[r:RELATED_TO]->(center)
+           RETURN src.name AS sourceName, r.relType AS relType,
+                  center.name AS targetName, center.type AS targetType,
+                  r.description AS description`,
+          { userId, entityId },
+        );
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              entity: {
+                id: entity.id,
+                name: entity.name,
+                type: entity.type,
+                description: entity.description,
+              },
+              memories: memRows.map(m => ({ id: m.id, content: m.content, created_at: m.createdAt })),
+              relationships: relRows.map(r => ({
+                source: r.sourceName,
+                type: r.relType,
+                target: r.targetName,
+                description: r.description,
+              })),
+            }, null, 2),
+          }],
+        };
       } catch (e: any) {
-        console.error("Error deleting memories:", e);
-        return { content: [{ type: "text", text: `Error deleting memories: ${e.message}` }] };
+        return { content: [{ type: "text", text: `Error getting related memories: ${e.message}` }] };
       }
     }
   );
 
-  // -------- delete_all_memories --------
+  // -------- get_memory_map --------
   server.registerTool(
-    "delete_all_memories",
+    "get_memory_map",
     {
-      description: "Delete all memories in the user's memory",
+      description:
+        "Build a knowledge map centered on an entity — returns all connected entities and the relationships " +
+        "between them as a structured graph (nodes + edges), including inter-neighbor connections. " +
+        "Use when you need to understand a complex relationship network or visualize how concepts relate. " +
+        "Set depth=2 for friends-of-friends (default: 1).",
+      inputSchema: getMemoryMapSchema,
     },
-    async () => {
-      if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
-      if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
+    async ({ entity_id, depth, limit, max_edges }) => {
+      if (!userId) return { content: [{ type: "text" as const, text: "Error: user_id not provided" }] };
 
       try {
-        const count = await deleteAllMemories(userId, clientName);
-        return { content: [{ type: "text", text: `Successfully deleted ${count} memories` }] };
-      } catch (e: any) {
-        console.error("Error deleting memories:", e);
-        return { content: [{ type: "text", text: `Error deleting memories: ${e.message}` }] };
+        const effectiveDepth = Math.min(depth ?? 1, 3);
+        const effectiveLimit = Math.min(limit ?? 50, 50);
+        const effectiveMaxEdges = Math.min(max_edges ?? 100, 500);
+
+        // Get the center entity
+        const centerRows = await runRead<{
+          id: string; name: string; type: string; description: string | null;
+        }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity {id: $entityId})
+           RETURN e.id AS id, e.name AS name, e.type AS type, e.description AS description`,
+          { userId, entityId: entity_id },
+        );
+
+        if (centerRows.length === 0) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Entity not found" }) }] };
+        }
+
+        // Collect all entities in the subgraph via co-occurrence
+        const allNeighbors = await runRead<{
+          id: string; name: string; type: string; description: string | null; hop: number;
+        }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(center:Entity {id: $entityId})
+           MATCH (m:Memory)-[:MENTIONS]->(center)
+           WHERE m.invalidAt IS NULL
+           MATCH (m)-[:MENTIONS]->(hop1:Entity)<-[:HAS_ENTITY]-(u)
+           WHERE hop1.id <> center.id
+           WITH DISTINCT u, center, hop1
+           RETURN hop1.id AS id, hop1.name AS name, hop1.type AS type,
+                  hop1.description AS description, 1 AS hop
+           LIMIT $limit`,
+          { userId, entityId: entity_id, limit: effectiveLimit },
+        );
+
+        // For depth >= 2, add second-hop entities
+        const hop2Entities: typeof allNeighbors = [];
+        if (effectiveDepth >= 2 && allNeighbors.length > 0) {
+          const hop1Ids = allNeighbors.map((n) => n.id);
+          const hop2Rows = await runRead<{
+            id: string; name: string; type: string; description: string | null;
+          }>(
+            `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(hop1:Entity)
+             WHERE hop1.id IN $hop1Ids
+             MATCH (m:Memory)-[:MENTIONS]->(hop1)
+             WHERE m.invalidAt IS NULL
+             MATCH (m)-[:MENTIONS]->(hop2:Entity)<-[:HAS_ENTITY]-(u)
+             WHERE hop2.id <> $centerId AND NOT hop2.id IN $hop1Ids
+             WITH DISTINCT hop2
+             RETURN hop2.id AS id, hop2.name AS name, hop2.type AS type,
+                    hop2.description AS description
+             LIMIT $limit`,
+            { userId, hop1Ids, centerId: entity_id, limit: effectiveLimit },
+          );
+          for (const r of hop2Rows) {
+            hop2Entities.push({ ...r, hop: 2 });
+          }
+        }
+
+        // All node IDs in the subgraph
+        const allNodes = [centerRows[0], ...allNeighbors, ...hop2Entities];
+        const allIds = allNodes.map((n) => n.id);
+
+        // Get all co-occurrence edges between nodes in the subgraph
+        const coEdges = await runRead<{
+          srcName: string; tgtName: string; weight: number;
+        }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(src:Entity),
+                 (u)-[:HAS_ENTITY]->(tgt:Entity)
+           WHERE src.id IN $ids AND tgt.id IN $ids AND src.id < tgt.id
+           MATCH (m:Memory)-[:MENTIONS]->(src)
+           WHERE m.invalidAt IS NULL
+           MATCH (m)-[:MENTIONS]->(tgt)
+           WITH src.name AS srcName, tgt.name AS tgtName, count(DISTINCT m) AS weight
+           WHERE weight > 0
+           RETURN srcName, tgtName, weight
+           ORDER BY weight DESC`,
+          { userId, ids: allIds },
+        );
+
+        // Get explicit RELATED_TO edges between subgraph nodes
+        const relEdges = await runRead<{
+          srcName: string; relType: string; tgtName: string; description: string | null;
+        }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(src:Entity)-[r:RELATED_TO]->(tgt:Entity)<-[:HAS_ENTITY]-(u)
+           WHERE src.id IN $ids AND tgt.id IN $ids
+           RETURN src.name AS srcName, r.relType AS relType,
+                  tgt.name AS tgtName, r.description AS description`,
+          { userId, ids: allIds },
+        );
+
+        console.log(`[MCP] get_memory_map entity=${entity_id} nodes=${allNodes.length} coEdges=${coEdges.length} relEdges=${relEdges.length}`);
+
+        const allEdges = [
+          ...coEdges.map((e) => ({
+            source: e.srcName, target: e.tgtName,
+            relationship: "CO_OCCURS_WITH",
+            weight: e.weight,
+          })),
+          ...relEdges.map((e) => ({
+            source: e.srcName, target: e.tgtName,
+            relationship: e.relType,
+            description: e.description,
+          })),
+        ];
+
+        const truncated = allEdges.length > effectiveMaxEdges;
+        const edges = truncated ? allEdges.slice(0, effectiveMaxEdges) : allEdges;
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              nodes: allNodes.map((n) => ({
+                id: n.id, name: n.name, type: n.type,
+                description: n.description,
+                hop: "hop" in n ? n.hop : 0,
+              })),
+              edges,
+              ...(truncated ? {
+                truncated: true,
+                totalEdges: allEdges.length,
+                returnedEdges: edges.length,
+              } : {}),
+            }, null, 2),
+          }],
+        };
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("Error in get_memory_map:", msg);
+        return { content: [{ type: "text" as const, text: `Error building memory map: ${msg}` }] };
       }
-    }
+    },
+  );
+
+  // -------- create_memory_relation --------
+  server.registerTool(
+    "create_memory_relation",
+    {
+      description:
+        "Create or update a typed relationship between two entities (e.g. 'Alice WORKS_AT Acme', " +
+        "'User USES TypeScript'). Entities are auto-created if they don't exist yet. " +
+        "Use when the user states a fact linking two things, or when you extract structured knowledge from conversation.",
+      inputSchema: createMemoryRelationSchema,
+    },
+    async ({ source_entity, relationship_type, target_entity, description }) => {
+      if (!userId) return { content: [{ type: "text" as const, text: "Error: user_id not provided" }] };
+
+      try {
+        const now = new Date().toISOString();
+        const relType = relationship_type.toUpperCase().replace(/\s+/g, "_");
+        const srcInput = source_entity.trim();
+        const tgtInput = target_entity.trim();
+        const desc = description ?? "";
+        const relId = randomUUID();
+
+        // Use shared resolveEntity to avoid entity duplication between
+        // create_memory_relation and the extraction pipeline (Eval v4 Finding 1)
+        const srcId = await resolveEntity(
+          { name: srcInput, type: "CONCEPT", description: desc },
+          userId,
+        );
+        const tgtId = await resolveEntity(
+          { name: tgtInput, type: "CONCEPT", description: "" },
+          userId,
+        );
+        const src = { id: srcId, name: srcInput };
+        const tgt = { id: tgtId, name: tgtInput };
+
+        // MERGE the RELATED_TO edge using entity IDs (not names)
+        const rows = await runWrite<{ relId: string; srcName: string; tgtName: string }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(src:Entity {id: $srcId})
+           MATCH (u)-[:HAS_ENTITY]->(tgt:Entity {id: $tgtId})
+           MERGE (src)-[r:RELATED_TO {relType: $relType}]->(tgt)
+           ON CREATE SET r.id = $relId, r.description = $desc, r.createdAt = $now, r.updatedAt = $now
+           ON MATCH SET r.description = $desc, r.updatedAt = $now
+           RETURN r.id AS relId, src.name AS srcName, tgt.name AS tgtName`,
+          { userId, srcId: src.id, tgtId: tgt.id, relType, relId, desc, now },
+        );
+
+        const srcName = rows[0]?.srcName ?? src.name;
+        const tgtName = rows[0]?.tgtName ?? tgt.name;
+        console.log(`[MCP] create_memory_relation ${srcName} -[${relType}]-> ${tgtName}`);
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              relationship: {
+                id: rows[0]?.relId ?? relId,
+                source: srcName,
+                type: relType,
+                target: tgtName,
+                description: desc,
+              },
+              message: "Relationship created successfully",
+            }, null, 2),
+          }],
+        };
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("Error in create_memory_relation:", msg);
+        return { content: [{ type: "text" as const, text: `Error creating memory relation: ${msg}` }] };
+      }
+    },
+  );
+
+  // -------- delete_memory_relation --------
+  server.registerTool(
+    "delete_memory_relation",
+    {
+      description:
+        "Remove a specific typed relationship between two entities. Use when a previously known fact " +
+        "is no longer true (e.g. someone left a company, stopped using a tool, or moved cities).",
+      inputSchema: deleteMemoryRelationSchema,
+    },
+    async ({ source_entity, relationship_type, target_entity }) => {
+      if (!userId) return { content: [{ type: "text" as const, text: "Error: user_id not provided" }] };
+
+      try {
+        const relType = relationship_type.toUpperCase().replace(/\s+/g, "_");
+        const srcInput = source_entity.trim();
+        const tgtInput = target_entity.trim();
+
+        const rows = await runWrite<{ count: number }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(src:Entity)
+           WHERE toLower(src.name) = toLower($srcName)
+           MATCH (u)-[:HAS_ENTITY]->(tgt:Entity)
+           WHERE toLower(tgt.name) = toLower($tgtName)
+           MATCH (src)-[r:RELATED_TO {relType: $relType}]->(tgt)
+           DELETE r
+           RETURN count(r) AS count`,
+          { userId, srcName: srcInput, tgtName: tgtInput, relType },
+        );
+
+        const deleted = rows[0]?.count ?? 0;
+        console.log(`[MCP] delete_memory_relation ${srcInput} -[${relType}]-> ${tgtInput} deleted=${deleted}`);
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: deleted > 0
+              ? `Successfully removed relationship ${srcInput} -[${relType}]-> ${tgtInput}`
+              : "No matching relationship found to remove",
+          }],
+        };
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("Error in delete_memory_relation:", msg);
+        return { content: [{ type: "text" as const, text: `Error deleting memory relation: ${msg}` }] };
+      }
+    },
+  );
+
+  // -------- delete_memory_entity --------
+  server.registerTool(
+    "delete_memory_entity",
+    {
+      description:
+        "Remove an entity and all its connections from memory. The memories themselves are preserved — " +
+        "only the entity record and its relationships are deleted. " +
+        "WARNING: This also removes all explicit relationships (e.g. OWNS, WORKS_AT) " +
+        "connected to this entity. Use when the user asks to stop tracking " +
+        "a specific person, concept, or organization.",
+      inputSchema: deleteMemoryEntitySchema,
+    },
+    async ({ entity_id }) => {
+      if (!userId) return { content: [{ type: "text" as const, text: "Error: user_id not provided" }] };
+
+      try {
+        // Count relationships that will be lost before deleting
+        const countRows = await runRead<{
+          name: string; mentionCount: number; relationCount: number;
+        }>(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity {id: $entityId})
+           OPTIONAL MATCH (m:Memory)-[mention:MENTIONS]->(e)
+           WITH e, count(mention) AS mentionCount
+           OPTIONAL MATCH (e)-[rel:RELATED_TO]-()
+           RETURN e.name AS name, mentionCount,
+                  count(rel) AS relationCount`,
+          { userId, entityId: entity_id },
+        );
+
+        if (countRows.length === 0 || countRows[0].name == null) {
+          return { content: [{ type: "text" as const, text: "Error: Entity not found or not owned by user" }] };
+        }
+
+        const { name, mentionCount, relationCount } = countRows[0];
+
+        // Now perform the DETACH DELETE
+        await runWrite(
+          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity {id: $entityId})
+           DETACH DELETE e`,
+          { userId, entityId: entity_id },
+        );
+
+        console.log(`[MCP] delete_memory_entity id=${entity_id} name=${name} mentions=${mentionCount} relations=${relationCount}`);
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              deleted: {
+                entity: name,
+                mentionEdgesRemoved: mentionCount,
+                relationshipsRemoved: relationCount,
+              },
+              message: `Removed entity "${name}" and all its connections (${mentionCount} memory mentions, ${relationCount} explicit relationships deleted)`,
+            }, null, 2),
+          }],
+        };
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("Error in delete_memory_entity:", msg);
+        return { content: [{ type: "text" as const, text: `Error deleting memory entity: ${msg}` }] };
+      }
+    },
   );
 
   return server;
