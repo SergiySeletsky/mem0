@@ -14,8 +14,7 @@ openmemory/ui/
   lib/memory/search.ts← listMemories() — used by GET routes
   lib/search/hybrid.ts← BM25 + vector + Reciprocal Rank Fusion (Spec 02)
   lib/ai/client.ts   ← getLLMClient() singleton (OpenAI or Azure)
-  lib/embeddings/openai.ts ← embed() — 1536-dim text-embedding-3-small
-  specs/             ← Numbered spec docs (00–09) for all major features
+  lib/embeddings/intelli.ts ← embed() — default provider: intelli-embed-v3 (1024-dim, local ONNX INT8 via @huggingface/transformers, no API key needed); falls back to Azure if configured
 ```
 
 ## Memgraph Data Model
@@ -57,7 +56,7 @@ Live memories always filtered with `WHERE m.invalidAt IS NULL`. Edits call `supe
 `lib/memory/write.ts`: context window → embed → dedup check → `CREATE Memory` node → attach App → fire-and-forget: `categorizeMemory()` + `processEntityExtraction()`. Any new write should follow this pipeline rather than writing Memory nodes directly.
 
 ### LLM / Embedding clients
-Use `getLLMClient()` from `lib/ai/client.ts` and `embed()` from `lib/embeddings/openai.ts`. Both singletons auto-select Azure or OpenAI based on env vars. Model for LLM calls: `process.env.LLM_AZURE_DEPLOYMENT ?? process.env.OPENMEMORY_CATEGORIZATION_MODEL ?? "gpt-4o-mini"`.
+Use `getLLMClient()` from `lib/ai/client.ts` and `embed()` from `lib/embeddings/openai.ts`. LLM singleton auto-selects Azure or OpenAI based on env vars. Model for LLM calls: `process.env.LLM_AZURE_DEPLOYMENT ?? process.env.OPENMEMORY_CATEGORIZATION_MODEL ?? "gpt-4o-mini"`. Default embedding provider is [`serhiiseletskyi/intelli-embed-v3`](https://huggingface.co/serhiiseletskyi/intelli-embed-v3) — a custom-trained arctic-embed-l-v2 finetune, 1024-dim, INT8 ONNX, runs locally via `@huggingface/transformers` with no API key; chosen after benchmarking 21 providers because it beats Azure on dedup and negation safety metrics while running at ~11ms on CPU.
 
 ### Async config
 `getConfigFromDb()` / `getDedupConfig()` / `getContextWindowConfig()` are **async** — they read Memgraph `Config` nodes. All callers must `await` them.
@@ -105,9 +104,9 @@ Azure Embedding: `EMBEDDING_AZURE_OPENAI_API_KEY` + `EMBEDDING_AZURE_ENDPOINT`
 
 ## Spec Reference
 
-Features are tracked in `specs/00`–`09`. When modifying a feature, check its spec first:
-`00`=Memgraph port, `01`=bi-temporal, `02`=hybrid search, `03`=dedup, `04`=entity extraction,
-`05`=context window, `06`=bulk ingestion, `07`=community detection, `08`=cross-encoder reranking, `09`=namespace isolation.
+Features are tracked inline in source files and code comments. Key specs by domain:
+bi-temporal writes, hybrid search (BM25+vector RRF), dedup, entity extraction,
+context window, bulk ingestion, community detection, cross-encoder reranking, namespace isolation.
 
 ## Frontend Conventions
 

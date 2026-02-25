@@ -77,7 +77,8 @@ export function deepUpdate(source: any, overrides: any): any {
 
 export interface DedupConfig {
   enabled: boolean;
-  threshold: number; // cosine similarity threshold 0–1
+  threshold: number;      // cosine similarity threshold 0–1 (default provider)
+  azureThreshold: number; // Azure-specific threshold (lower: supSim=0.613 on text-embedding-3-small)
 }
 
 /**
@@ -95,9 +96,10 @@ export async function getDedupConfig(): Promise<DedupConfig> {
     return {
       enabled: dedupCfg.enabled ?? true,
       threshold: dedupCfg.threshold ?? 0.75,
+      azureThreshold: dedupCfg.azureThreshold ?? 0.55,
     };
   } catch {
-    return { enabled: true, threshold: 0.75 };
+    return { enabled: true, threshold: 0.75, azureThreshold: 0.55 };
   }
 }
 

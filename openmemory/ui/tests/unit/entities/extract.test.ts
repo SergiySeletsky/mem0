@@ -9,15 +9,18 @@ export {};
  */
 import { extractEntitiesFromMemory } from "@/lib/entities/extract";
 
-jest.mock("openai");
-import OpenAI from "openai";
+jest.mock("@/lib/ai/client", () => ({ getLLMClient: jest.fn() }));
+import { getLLMClient } from "@/lib/ai/client";
+const mockGetLLMClient = getLLMClient as jest.MockedFunction<typeof getLLMClient>;
 
 const mockCreate = jest.fn();
-(OpenAI as jest.MockedClass<typeof OpenAI>).mockImplementation(
-  () => ({ chat: { completions: { create: mockCreate } } } as any)
-);
-
-beforeEach(() => jest.clearAllMocks());
+// Wire up the mock client before each test
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockGetLLMClient.mockReturnValue({
+    chat: { completions: { create: mockCreate } },
+  } as any);
+});
 
 describe("extractEntitiesFromMemory", () => {
   it("EXTRACT_01: returns entities with name/type/description", async () => {

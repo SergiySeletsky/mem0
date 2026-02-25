@@ -2,41 +2,183 @@
  * lib/entities/resolve.ts — Entity resolution / find-or-create (Spec 04)
  *
  * Uses Cypher to atomically find or create an Entity node for the user.
- * Entities are matched by lowercased name only (ignoring type) to prevent
- * fragmentation when the LLM assigns different types to the same entity
- * in different memory contexts (e.g. "ADR-001" as CONCEPT vs OTHER).
+ * Entities are matched by normalizedName (lowercased + stripped punctuation/spaces)
+ * to prevent fragmentation when the LLM uses slightly different name forms
+ * (e.g. "OrderService" vs "Order Service" vs "order-service").
  *
- * When merging, the most specific (non-OTHER) type wins.
- * Description is updated only when the new one is longer.
+ * Three-tier resolution:
+ *   1. normalizedName exact match (e.g. "orderservice")
+ *   2. PERSON alias match (prefix/suffix word-boundary, e.g. "Alice" ↔ "Alice Chen")
+ *   3. Semantic dedup — embed name+description and cosine-match against existing
+ *      entities, then confirm via LLM before merging (threshold: 0.88)
+ *
+ * Type upgrade rules (open ontology):
+ *   - OTHER (rank 99) is the lowest — always upgradeable from it.
+ *   - CONCEPT (rank 6) upgrades from OTHER only.
+ *   - Domain-specific types (not in TYPE_PRIORITY; rank 5) beat CONCEPT but
+ *     lose to PERSON / ORGANIZATION / LOCATION / PRODUCT.
+ *   - When merging, the most informative (lowest rank) type wins.
  */
 import { runRead, runWrite } from "@/lib/db/memgraph";
 import { embed } from "@/lib/embeddings/openai";
+import { getLLMClient } from "@/lib/ai/client";
+import { buildEntityMergePrompt } from "./prompts";
 import { v4 as uuidv4 } from "uuid";
 import type { ExtractedEntity } from "./extract";
 
-/** Type specificity ranking — lower index = more specific. OTHER is least specific. */
+// ---------------------------------------------------------------------------
+// Name normalisation
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalise an entity name for deduplication purposes.
+ * "Order Service", "OrderService", "order-service", "order_service" all
+ * normalise to "orderservice".
+ */
+export function normalizeName(name: string): string {
+  return name.toLowerCase().replace(/[\s\-_./\\]+/g, "");
+}
+
+// ---------------------------------------------------------------------------
+// Type priority (open ontology)
+// ---------------------------------------------------------------------------
+
+/**
+ * Explicit priority for the 6 well-known base types plus space for domain types.
+ * Domain-specific types (NOT listed here) fall back to DOMAIN_TYPE_DEFAULT_RANK,
+ * which places them BETWEEN PRODUCT and CONCEPT — i.e. more specific than CONCEPT
+ * but less specific than PERSON / ORGANIZATION / LOCATION / PRODUCT.
+ */
 const TYPE_PRIORITY: Record<string, number> = {
   PERSON: 1,
   ORGANIZATION: 2,
   LOCATION: 3,
   PRODUCT: 4,
-  CONCEPT: 5,
-  OTHER: 6,
+  // Domain-specific types default to rank 5 (inserted here dynamically)
+  CONCEPT: 6,
+  OTHER: 99,
 };
 
-function isMoreSpecific(newType: string, existingType: string): boolean {
-  const newRank = TYPE_PRIORITY[newType] ?? 5;
-  const existingRank = TYPE_PRIORITY[existingType] ?? 5;
-  return newRank < existingRank;
+const DOMAIN_TYPE_DEFAULT_RANK = 5;
+
+function getTypeRank(type: string): number {
+  return TYPE_PRIORITY[type] ?? DOMAIN_TYPE_DEFAULT_RANK;
 }
+
+function isMoreSpecific(newType: string, existingType: string): boolean {
+  if (newType === existingType) return false;
+  return getTypeRank(newType) < getTypeRank(existingType);
+}
+
+// ---------------------------------------------------------------------------
+// Semantic dedup constants
+// ---------------------------------------------------------------------------
+
+const SEMANTIC_DEDUP_THRESHOLD = 0.88;
+const SEMANTIC_DEDUP_TOP_K = 5;
+
+// ---------------------------------------------------------------------------
+// Semantic entity lookup
+// ---------------------------------------------------------------------------
+
+interface EntityCandidate {
+  id: string;
+  name: string;
+  type: string;
+  description: string;
+  similarity: number;
+}
+
+/**
+ * Find semantically similar entities in the user's graph using the
+ * entity_vectors index, then confirm the best candidate via LLM.
+ *
+ * Fails silently (returns null) when:
+ *   - embed() throws (no API key in tests / dev)
+ *   - entity_vectors index doesn't exist yet
+ *   - No candidates exceed the similarity threshold
+ *   - LLM rejects the merge
+ */
+async function findEntityBySemantic(
+  extracted: ExtractedEntity,
+  userId: string
+): Promise<EntityCandidate | null> {
+  try {
+    const embeddingInput = extracted.name + (extracted.description ? ": " + extracted.description : "");
+    const embedding = await embed(embeddingInput);
+
+    const candidates = await runRead<EntityCandidate>(
+      `CALL vector_search.search("entity_vectors", toInteger($fetchLimit), $embedding)
+       YIELD node, similarity
+       MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(node)
+       WHERE similarity >= $threshold
+       RETURN node.id AS id, node.name AS name, node.type AS type,
+              coalesce(node.description, '') AS description, similarity
+       ORDER BY similarity DESC
+       LIMIT $limit`,
+      {
+        userId,
+        fetchLimit: SEMANTIC_DEDUP_TOP_K * 3,
+        embedding,
+        threshold: SEMANTIC_DEDUP_THRESHOLD,
+        limit: SEMANTIC_DEDUP_TOP_K,
+      }
+    );
+
+    if (candidates.length === 0) return null;
+
+    // Ask the LLM to confirm whether the top candidate is the same entity
+    const best = candidates[0];
+    const confirmed = await confirmMergeViaLLM(extracted, best);
+    return confirmed ? best : null;
+  } catch {
+    // Graceful degradation — embed unavailable or index missing
+    return null;
+  }
+}
+
+/**
+ * Ask the LLM whether an incoming entity and an existing candidate refer to
+ * the same real-world entity. Returns true only when the LLM says yes.
+ */
+async function confirmMergeViaLLM(
+  incoming: ExtractedEntity,
+  existing: EntityCandidate
+): Promise<boolean> {
+  try {
+    const model =
+      process.env.LLM_AZURE_DEPLOYMENT ??
+      process.env.OPENMEMORY_CATEGORIZATION_MODEL ??
+      "gpt-4o-mini";
+    const client = getLLMClient();
+    const prompt = buildEntityMergePrompt(
+      { name: incoming.name, type: incoming.type ?? "", description: incoming.description ?? "" },
+      { name: existing.name, type: existing.type, description: existing.description }
+    );
+    const response = await client.chat.completions.create({
+      model,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0,
+      max_tokens: 20,
+    });
+    const raw = response.choices[0]?.message?.content ?? "";
+    const parsed = JSON.parse(raw.trim()) as { same: boolean };
+    return parsed.same === true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main resolver
+// ---------------------------------------------------------------------------
 
 /**
  * Find or create an Entity node scoped to the given user.
  * Returns the entity's id (existing or newly created).
  *
- * Match key: toLower(name) + userId (type is NOT part of the match key).
- * On match: upgrades type if new type is more specific, updates description
- * if longer.
+ * Match key: normalizeName(name) + userId (type is NOT part of the match key).
+ * On match: upgrades type if new type is more specific, updates description if longer.
  */
 export async function resolveEntity(
   extracted: ExtractedEntity,
@@ -45,6 +187,7 @@ export async function resolveEntity(
   const id = uuidv4();
   const now = new Date().toISOString();
   const normalizedType = (extracted.type ?? "CONCEPT").toUpperCase();
+  const normName = normalizeName(extracted.name);
 
   // Step 1: ensure User node exists
   await runWrite(
@@ -53,7 +196,7 @@ export async function resolveEntity(
     { userId, now }
   );
 
-  // Step 2: Find existing entity by case-insensitive name match (ignoring type)
+  // Step 2: Find existing entity by normalizedName (case+punctuation-insensitive)
   let existing = await runWrite<{
     id: string;
     name: string;
@@ -61,16 +204,16 @@ export async function resolveEntity(
     description: string;
   }>(
     `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity)
-     WHERE toLower(e.name) = toLower($name)
+     WHERE e.normalizedName = $normName
      RETURN e.id AS id, e.name AS name, e.type AS type,
             coalesce(e.description, '') AS description
      LIMIT 1`,
-    { userId, name: extracted.name }
+    { userId, normName }
   );
 
   // Step 2b: Name-alias resolution for PERSON entities (Eval v4 Finding 2)
-  // If no exact match was found and the entity is a PERSON, check for partial
-  // name matches: "Alice" ↔ "Alice Chen" (prefix match on word boundary).
+  // If no normalised match and entity is a PERSON, check prefix/suffix word-boundary
+  // matches: "Alice" ↔ "Alice Chen".
   if (existing.length === 0 && normalizedType === "PERSON") {
     existing = await runRead<{
       id: string;
@@ -91,7 +234,7 @@ export async function resolveEntity(
       { userId, name: extracted.name }
     );
 
-    // If we found a partial match, upgrade the stored name to the longer form
+    // Upgrade the stored name to the longer canonical form
     if (existing.length > 0 && extracted.name.length > existing[0].name.length) {
       await runWrite(
         `MATCH (e:Entity {id: $entityId})
@@ -99,6 +242,16 @@ export async function resolveEntity(
         { entityId: existing[0].id, longerName: extracted.name, now }
       );
       existing[0].name = extracted.name;
+    }
+  }
+
+  // Step 2c: Semantic dedup — embed name+description, vector-search entity_vectors,
+  // confirm top match via LLM before merging.  Fails open (no match) when embed is
+  // unavailable or the LLM rejects the merge.
+  if (existing.length === 0) {
+    const semanticMatch = await findEntityBySemantic(extracted, userId);
+    if (semanticMatch) {
+      existing = [semanticMatch];
     }
   }
 
@@ -128,16 +281,19 @@ export async function resolveEntity(
       );
     }
   } else {
-    // Create new entity
+    // Create new entity with normalizedName stored for fast future lookups
     await runWrite(
       `CREATE (e:Entity {
-         id: $id, userId: $userId, name: $name, type: $type,
-         description: $description, createdAt: $now, updatedAt: $now
+         id: $id, userId: $userId,
+         name: $name, normalizedName: $normalizedName,
+         type: $type, description: $description,
+         createdAt: $now, updatedAt: $now
        })`,
       {
         id,
         userId,
         name: extracted.name,
+        normalizedName: normName,
         type: normalizedType,
         description: extracted.description ?? "",
         now,
@@ -154,7 +310,7 @@ export async function resolveEntity(
     );
   }
 
-  // Fire-and-forget: compute description embedding for semantic entity search
+  // Fire-and-forget: compute description embedding for future semantic dedup lookups
   const descText = extracted.description ?? extracted.name;
   if (descText) {
     embedDescriptionAsync(entityId, descText).catch((err) =>
@@ -171,12 +327,12 @@ export async function resolveEntity(
  */
 async function embedDescriptionAsync(
   entityId: string,
-  text: string,
+  text: string
 ): Promise<void> {
   const vector = await embed(text);
   await runWrite(
     `MATCH (e:Entity {id: $entityId})
      SET e.descriptionEmbedding = $vector`,
-    { entityId, vector },
+    { entityId, vector }
   );
 }

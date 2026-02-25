@@ -3,20 +3,37 @@ export {};
  * Unit tests — resolveEntity (lib/entities/resolve.ts)
  *
  * RESOLVE_01: First call creates a new Entity, returns an id
- * RESOLVE_02: Second call with same name returns the SAME id (case-insensitive)
+ * RESOLVE_02: Second call with same name returns the SAME id (normalizedName dedup)
  * RESOLVE_03: Same name but different type → SAME entity (type dedup), upgrades type if more specific
  * RESOLVE_04: Longer description on re-resolve updates the description
  * RESOLVE_08-11: Name-alias resolution for PERSON entities (Eval v4 Finding 2)
+ * RESOLVE_12: normalizedName dedup — "Order Service" == "OrderService" (whitespace stripped)
+ * RESOLVE_13: Semantic dedup — embedding match + LLM confirms merge
+ * RESOLVE_14: Semantic dedup — LLM rejects merge → creates new entity
+ * RESOLVE_15: Semantic dedup — embed fails → graceful fallback → creates new entity
+ * RESOLVE_16: Domain-specific type "SERVICE" upgrades "CONCEPT" (open ontology)
  */
 import { resolveEntity } from "@/lib/entities/resolve";
 
 jest.mock("@/lib/db/memgraph", () => ({ runRead: jest.fn(), runWrite: jest.fn() }));
 import { runRead, runWrite } from "@/lib/db/memgraph";
 
+jest.mock("@/lib/embeddings/openai", () => ({ embed: jest.fn() }));
+import { embed } from "@/lib/embeddings/openai";
+
+jest.mock("@/lib/ai/client", () => ({ getLLMClient: jest.fn() }));
+import { getLLMClient } from "@/lib/ai/client";
+
 const mockRunRead = runRead as jest.MockedFunction<typeof runRead>;
 const mockRunWrite = runWrite as jest.MockedFunction<typeof runWrite>;
+const mockEmbed = embed as jest.MockedFunction<typeof embed>;
+const mockGetLLMClient = getLLMClient as jest.MockedFunction<typeof getLLMClient>;
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  // Default: embed fails → findEntityBySemantic returns null (no semantic dedup side-effects)
+  mockEmbed.mockRejectedValue(new Error("No API key in tests"));
+});
 
 describe("resolveEntity", () => {
   it("RESOLVE_01: creates a new entity and returns an id string", async () => {
@@ -42,9 +59,9 @@ describe("resolveEntity", () => {
     expect(mockRunWrite).toHaveBeenCalledTimes(4);
     expect(mockRunRead).toHaveBeenCalledTimes(1);
 
-    // calls[1] is the entity lookup — it uses toLower() for case-insensitive matching
+    // calls[1] is the entity lookup — uses normalizedName for punctuation+case-insensitive matching
     const lookupCypher = mockRunWrite.mock.calls[1][0] as string;
-    expect(lookupCypher).toContain("toLower");
+    expect(lookupCypher).toContain("normalizedName");
     // calls[2] is the CREATE — creating the new entity
     const createCypher = mockRunWrite.mock.calls[2][0] as string;
     expect(createCypher).toContain("CREATE");
@@ -259,5 +276,169 @@ describe("resolveEntity", () => {
     // Only 2 runWrite calls — exact match found, no alias query
     expect(mockRunWrite).toHaveBeenCalledTimes(2);
     expect(mockRunRead).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // normalizedName dedup (RESOLVE_12)
+  // ---------------------------------------------------------------------------
+
+  it("RESOLVE_12: 'Order Service' and 'OrderService' resolve to the SAME entity (normalizedName)", async () => {
+    // First call: creates "OrderService" as SERVICE type
+    mockRunWrite
+      .mockResolvedValueOnce([{}])   // User MERGE
+      .mockResolvedValueOnce([])     // normalizedName "orderservice" lookup → empty
+      .mockResolvedValueOnce([{}])   // CREATE Entity (stores normalizedName: "orderservice")
+      .mockResolvedValueOnce([{}]);  // HAS_ENTITY MERGE
+
+    const id1 = await resolveEntity({ name: "OrderService", type: "SERVICE", description: "Order microservice" }, "user-1");
+
+    // Second call: "Order Service" normalizes to "orderservice" — should find existing
+    mockRunWrite
+      .mockResolvedValueOnce([{}])   // User MERGE
+      .mockResolvedValueOnce([{      // normalizedName "orderservice" lookup → HIT
+        id: id1, name: "OrderService", type: "SERVICE", description: "Order microservice",
+      }]);
+
+    const id2 = await resolveEntity({ name: "Order Service", type: "SERVICE", description: "" }, "user-1");
+
+    expect(id1).toBe(id2);
+
+    // Verify the CREATE call stored normalizedName
+    const createParams = mockRunWrite.mock.calls[2][1] as Record<string, unknown>;
+    expect(createParams.normalizedName).toBe("orderservice");
+
+    // Verify the second lookup used normalizedName (not toLower)
+    const secondLookupCypher = mockRunWrite.mock.calls[5][0] as string;
+    expect(secondLookupCypher).toContain("normalizedName");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Semantic dedup (RESOLVE_13, RESOLVE_14, RESOLVE_15)
+  // ---------------------------------------------------------------------------
+
+  it("RESOLVE_13: semantic dedup — embedding match + LLM confirms merge → reuses existing entity", async () => {
+    // normalizedName lookup fails, alias skipped (CONCEPT type)
+    mockRunWrite
+      .mockResolvedValueOnce([{}])  // User MERGE
+      .mockResolvedValueOnce([]);   // normalizedName lookup → empty
+
+    // embed() returns a valid vector for semantic search (once only — so embedDescriptionAsync still rejects)
+    const fakeVector = Array.from({ length: 1536 }, () => 0.01);
+    mockEmbed.mockResolvedValueOnce(fakeVector);
+
+    // vector_search returns a near-duplicate above the 0.88 threshold
+    mockRunRead.mockResolvedValueOnce([{
+      id: "redis-entity-id",
+      name: "Redis",
+      type: "DATABASE",
+      description: "In-memory data store",
+      similarity: 0.92,
+    }]);
+
+    // LLM confirms the merge
+    const mockCreate = jest.fn().mockResolvedValue({
+      choices: [{ message: { content: '{"same":true}' } }],
+    });
+    mockGetLLMClient.mockReturnValue({ chat: { completions: { create: mockCreate } } } as any);
+
+    const id = await resolveEntity(
+      { name: "Redis Cache", type: "DATABASE", description: "Redis caching layer" },
+      "user-1"
+    );
+
+    // Should return the existing entity id, not create a new one
+    expect(id).toBe("redis-entity-id");
+    // Only 2 runWrite calls: User MERGE + normalizedName lookup
+    expect(mockRunWrite).toHaveBeenCalledTimes(2);
+    // runRead called once for vector search
+    expect(mockRunRead).toHaveBeenCalledTimes(1);
+    const vectorCypher = mockRunRead.mock.calls[0][0] as string;
+    expect(vectorCypher).toContain("vector_search.search");
+    expect(vectorCypher).toContain("entity_vectors");
+    // LLM confirmation was called
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("RESOLVE_14: semantic dedup — LLM rejects merge → creates new entity", async () => {
+    mockRunWrite
+      .mockResolvedValueOnce([{}])   // User MERGE
+      .mockResolvedValueOnce([])     // normalizedName lookup → empty
+      .mockResolvedValueOnce([{}])   // CREATE new entity
+      .mockResolvedValueOnce([{}]);  // HAS_ENTITY
+
+    const fakeVector = Array.from({ length: 1536 }, () => 0.01);
+    mockEmbed.mockResolvedValueOnce(fakeVector); // once only — embedDescriptionAsync falls back to rejected default
+
+    // vector_search returns a candidate
+    mockRunRead.mockResolvedValueOnce([{
+      id: "different-entity",
+      name: "Valkey",
+      type: "DATABASE",
+      description: "Fork of Redis",
+      similarity: 0.91,
+    }]);
+
+    // LLM REJECTS the merge — they're different entities
+    const mockCreate = jest.fn().mockResolvedValue({
+      choices: [{ message: { content: '{"same":false}' } }],
+    });
+    mockGetLLMClient.mockReturnValue({ chat: { completions: { create: mockCreate } } } as any);
+
+    const id = await resolveEntity(
+      { name: "Redis", type: "DATABASE", description: "In-memory data store" },
+      "user-1"
+    );
+
+    // Should create a brand-new entity (not merge with Valkey)
+    expect(id).not.toBe("different-entity");
+    // 4 runWrite calls: MERGE + lookup + CREATE + HAS_ENTITY
+    expect(mockRunWrite).toHaveBeenCalledTimes(4);
+    const createCypher = mockRunWrite.mock.calls[2][0] as string;
+    expect(createCypher).toContain("CREATE");
+  });
+
+  it("RESOLVE_15: semantic dedup — embed fails → graceful fallback → creates new entity", async () => {
+    mockRunWrite
+      .mockResolvedValueOnce([{}])   // User MERGE
+      .mockResolvedValueOnce([])     // normalizedName lookup → empty
+      .mockResolvedValueOnce([{}])   // CREATE new entity
+      .mockResolvedValueOnce([{}]);  // HAS_ENTITY
+
+    // embed already mocked to reject in beforeEach — no override needed
+
+    const id = await resolveEntity(
+      { name: "Kafka", type: "SERVICE", description: "Message broker" },
+      "user-1"
+    );
+
+    expect(typeof id).toBe("string");
+    // 4 runWrite calls: embed failed silently, no vector search runRead
+    expect(mockRunWrite).toHaveBeenCalledTimes(4);
+    expect(mockRunRead).not.toHaveBeenCalled();
+    const createCypher = mockRunWrite.mock.calls[2][0] as string;
+    expect(createCypher).toContain("CREATE");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Open ontology type upgrade (RESOLVE_16)
+  // ---------------------------------------------------------------------------
+
+  it("RESOLVE_16: domain-specific type 'SERVICE' upgrades 'CONCEPT' (open ontology priority)", async () => {
+    // Entity already exists as CONCEPT (generic base type)
+    mockRunWrite
+      .mockResolvedValueOnce([{}])   // User MERGE
+      .mockResolvedValueOnce([{      // Found existing as CONCEPT
+        id: "svc-id", name: "AuthService", type: "CONCEPT", description: "",
+      }])
+      .mockResolvedValueOnce([{}]);  // SET type upgrade
+
+    const id = await resolveEntity({ name: "AuthService", type: "SERVICE", description: "Auth service" }, "user-1");
+
+    expect(id).toBe("svc-id");
+    // 3 runWrite calls: MERGE + lookup + SET (upgrade)
+    expect(mockRunWrite).toHaveBeenCalledTimes(3);
+    const setParams = mockRunWrite.mock.calls[2][1] as Record<string, unknown>;
+    expect(setParams.shouldUpgradeType).toBe(true);
+    expect(setParams.newType).toBe("SERVICE");
   });
 });

@@ -23,7 +23,8 @@
       "protobufjs",
       "sharp",
       "@parcel/watcher",
-      "kuzu"
+      "kuzu",
+      "onnxruntime-node"
     ]
   }
 }

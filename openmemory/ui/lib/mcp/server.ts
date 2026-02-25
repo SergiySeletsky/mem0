@@ -1,12 +1,20 @@
 /**
  * MCP Server for OpenMemory — Spec 00 Memgraph port
  *
- * 10 MCP tools for agentic long-term memory, organized in two groups:
+ * 9 MCP tools for agentic long-term memory, organized in two groups:
  *
- *   Core Memory:      add_memory, search_memory, list_memories, update_memory
+ *   Core Memory:      add_memories, search_memory, update_memory
  *   Entity Knowledge:  search_memory_entities, get_memory_entity,
  *                      get_memory_map, create_memory_relation,
  *                      delete_memory_relation, delete_memory_entity
+ *
+ * add_memories accepts a single string or an array of strings so agents can
+ * flush an entire batch of facts in one round-trip.
+ *
+ * search_memory is dual-mode:
+ *   - query provided  → hybrid BM25 + vector search, ranked by relevance
+ *   - query omitted   → browse mode: chronological listing with offset/limit
+ *                       pagination and total count (replaces list_memories)
  *
  * Uses @modelcontextprotocol/sdk with SSE transport.
  * Context (user_id, client_name) is passed per-connection via the SSE URL path.
@@ -32,12 +40,29 @@ import { randomUUID } from "crypto";
  * Each request carries userId & clientName via closure.
  */
 // Pre-define tool input schemas to avoid TS2589 deep type instantiation
-const addMemorySchema = { content: z.string().describe("The fact, preference, or information to remember") };
+// search_memory is dual-mode — query is optional:
+//   present  → hybrid BM25 + vector search
+//   absent   → browse mode (chronological, paginated)
 const searchMemorySchema = {
-  query: z.string().describe("Natural language search query"),
-  limit: z.number().optional().describe("Maximum results to return (default: 10)"),
+  query: z.string().optional().describe(
+    "Natural language search query. " +
+    "When provided: hybrid relevance search (BM25 + vector). " +
+    "When omitted: returns all memories in reverse-chronological order with pagination."
+  ),
+  limit: z.number().optional().describe("Maximum results to return (default: 10 for search, 50 for browse; max: 200)"),
+  offset: z.number().optional().describe("Number of memories to skip — used for paginating browse results (no query). Default: 0"),
   category: z.string().optional().describe("Filter to memories in this category only"),
   created_after: z.string().optional().describe("ISO date — only return memories created after this date (e.g. '2026-02-01')"),
+};
+const addMemoriesSchema = {
+  content: z
+    .union([z.string(), z.array(z.string())])
+    .describe(
+      "One or more facts, preferences, goals, decisions, or information to remember. " +
+      "Pass a single string for one memory or an array of strings to write multiple " +
+      "memories in a single call — avoids N round-trips when ingesting a document or " +
+      "a batch of architectural decisions at once."
+    ),
 };
 const updateMemorySchema = {
   memory_id: z.string().describe("ID of the existing memory to update"),
@@ -49,12 +74,6 @@ const searchMemoryEntitiesSchema = {
   query: z.string().describe("Name, keyword, or description fragment to search for across remembered entities. Use specific name fragments (e.g. 'Alice', 'Memgraph') for best results; general concepts also work via description matching."),
   entity_type: z.string().optional().describe("Filter by entity type: PERSON, ORGANIZATION, LOCATION, CONCEPT, PRODUCT, or OTHER"),
   limit: z.number().optional().describe("Maximum number of entities to return (default: 10)"),
-};
-
-const listMemoriesSchema = {
-  limit: z.number().optional().describe("Maximum number of memories to return (default: 50, max: 200)"),
-  offset: z.number().optional().describe("Number of memories to skip for pagination (default: 0)"),
-  category: z.string().optional().describe("Filter to memories in this category only"),
 };
 
 const getMemoryEntitySchema = {
@@ -89,76 +108,178 @@ const deleteMemoryEntitySchema = {
 export function createMcpServer(userId: string, clientName: string): McpServer {
   const server = new McpServer({ name: "mem0-mcp-server", version: "1.0.0" });
 
-  // -------- add_memory --------
+  // -------- add_memories --------
   server.registerTool(
-    "add_memory",
+    "add_memories",
     {
-      description: "Save information to long-term memory. Call this when the user shares personal details, preferences, goals, decisions, or explicitly asks you to remember something. Supports automatic deduplication — existing memories are updated rather than duplicated.",
-      inputSchema: addMemorySchema,
+      description:
+        "Save one or more facts to long-term memory in a single call. " +
+        "Pass a single string or an array of strings — use the array form to flush " +
+        "an entire batch of architectural decisions, incident breadcrumbs, or document " +
+        "facts without paying N round-trip latencies. " +
+        "Supports automatic deduplication — existing memories are updated rather than duplicated.",
+      inputSchema: addMemoriesSchema,
     },
-    async ({ content: text }) => {
+    async ({ content }) => {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
       if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
 
+      // Normalise to array — accepts a single string for backward compatibility
+      const items: string[] = Array.isArray(content) ? content : [content];
+      if (items.length === 0) {
+        return { content: [{ type: "text", text: JSON.stringify({ results: [] }) }] };
+      }
+
+      const t0 = Date.now();
+      console.log(`[MCP] add_memories start userId=${userId} batch=${items.length}`);
+
       try {
-        const t0 = Date.now();
-        console.log(`[MCP] add_memory start for userId=${userId} text.length=${text.length}`);
+        /**
+         * Process every item concurrently:
+         *   - dedup check  (sequential per item; BM25 reads are safe to fan-out)
+         *   - write (add or supersede)
+         *   - async entity extraction (fire-and-forget per item)
+         * Each item is independent; a failure in one does not abort others.
+         */
+        const results = await Promise.all(
+          items.map(async (text) => {
+            try {
+              // Spec 03: Deduplication pre-write hook
+              const dedup = await checkDeduplication(text, userId);
 
-        // Spec 03: Deduplication pre-write hook
-        const dedup = await checkDeduplication(text, userId);
+              if (dedup.action === "skip") {
+                console.log(`[MCP] add_memories dedup skip — duplicate of ${dedup.existingId}`);
+                return { id: dedup.existingId, memory: text, event: "SKIP_DUPLICATE" as const };
+              }
 
-        if (dedup.action === "skip") {
-          console.log(`[MCP] add_memory dedup skip — duplicate of ${dedup.existingId}`);
-          return {
-            content: [{ type: "text", text: JSON.stringify({ results: [{ id: dedup.existingId, memory: text, event: "SKIP_DUPLICATE" }] }) }],
-          };
-        }
+              let id: string;
+              if (dedup.action === "supersede") {
+                console.log(`[MCP] add_memories dedup supersede — superseding ${dedup.existingId}`);
+                id = await supersedeMemory(dedup.existingId, text, userId, clientName);
+              } else {
+                id = await addMemory(text, {
+                  userId,
+                  appName: clientName,
+                  metadata: { source_app: "openmemory", mcp_client: clientName },
+                });
+              }
 
-        let id: string;
-        if (dedup.action === "supersede") {
-          console.log(`[MCP] add_memory dedup supersede — superseding ${dedup.existingId}`);
-          id = await supersedeMemory(dedup.existingId, text, userId, clientName);
-        } else {
-          id = await addMemory(text, {
-            userId,
-            appName: clientName,
-            metadata: { source_app: "openmemory", mcp_client: clientName },
-          });
-        }
+              const event = dedup.action === "supersede" ? "SUPERSEDE" : "ADD";
 
-        const event = dedup.action === "supersede" ? "SUPERSEDE" : "ADD";
-        console.log(`[MCP] add_memory done in ${Date.now() - t0}ms id=${id} event=${event}`);
+              // Spec 04: Async entity extraction — fire-and-forget, never blocks
+              processEntityExtraction(id).catch((e) => console.warn("[entity worker]", e));
 
-        // Spec 04: Async entity extraction — fire-and-forget, never blocks MCP response
-        processEntityExtraction(id).catch((e) => console.warn("[entity worker]", e));
+              return { id, memory: text, event } as { id: string; memory: string; event: "ADD" | "SUPERSEDE" };
+            } catch (itemErr: unknown) {
+              const msg = itemErr instanceof Error ? itemErr.message : String(itemErr);
+              console.error(`[MCP] add_memories item error text.slice(0,80)="${text.slice(0, 80)}" err=${msg}`);
+              return { id: null, memory: text, event: "ERROR" as const, error: msg };
+            }
+          })
+        );
+
+        console.log(`[MCP] add_memories done in ${Date.now() - t0}ms batch=${items.length}`);
 
         return {
-          content: [{ type: "text", text: JSON.stringify({ results: [{ id, memory: text, event }] }) }],
+          content: [{ type: "text", text: JSON.stringify({ results }) }],
         };
-      } catch (e: any) {
-        console.error("Error adding memory:", e);
-        return { content: [{ type: "text", text: `Error adding to memory: ${e.message}` }] };
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("Error in add_memories:", msg);
+        return { content: [{ type: "text", text: `Error adding memories: ${msg}` }] };
       }
     }
   );
 
-  // -------- search_memory --------
+  // -------- search_memory (dual-mode) --------
+  //
+  //   query absent / empty  →  BROWSE MODE
+  //     Chronological listing sorted by createdAt DESC.
+  //     Supports offset + limit pagination and returns total count.
+  //     Replaces the former list_memories tool.
+  //
+  //   query present  →  SEARCH MODE
+  //     Hybrid BM25 + vector search via Reciprocal Rank Fusion.
+  //     Returns relevance-ranked results with confidence signal.
+  //
   server.registerTool(
     "search_memory",
     {
-      description: "Search memories using natural language. Uses hybrid retrieval (semantic similarity + keyword matching) for best results. Call this proactively to personalize responses — check for relevant context before answering questions about the user's preferences, history, or prior conversations.",
+      description:
+        "Dual-mode memory tool. " +
+        "SEARCH (query provided): hybrid relevance search using BM25 + vector similarity — use for specific recall, " +
+        "incident lookup, policy checks, or any targeted question. " +
+        "BROWSE (query omitted): returns all memories newest-first with total count and offset/limit pagination — " +
+        "use on cold-start to see what is already known, for category audits, or to systematically page through the store.",
       inputSchema: searchMemorySchema,
     },
-    async ({ query, limit, category, created_after }) => {
+    async ({ query, limit, offset, category, created_after }) => {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
       if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
 
+      const browseMode = !query || query.trim() === "";
+
       try {
         const t0 = Date.now();
-        const effectiveLimit = limit ?? 10;
-        console.log(`[MCP] search_memory start for userId=${userId} query="${query}" limit=${effectiveLimit}`);
 
-        // Spec 02: use hybrid search (text + vector + RRF) instead of vector-only
+        // ── BROWSE MODE ───────────────────────────────────────────────────
+        if (browseMode) {
+          const effectiveLimit = Math.min(limit ?? 50, 200);
+          const effectiveOffset = offset ?? 0;
+          console.log(`[MCP] search_memory browse userId=${userId} limit=${effectiveLimit} offset=${effectiveOffset} category=${category}`);
+
+          const countRows = await runRead<{ total: number }>(
+            `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)
+             WHERE m.invalidAt IS NULL AND m.state <> 'deleted'
+             ${category ? `MATCH (m)-[:HAS_CATEGORY]->(cFilter:Category) WHERE toLower(cFilter.name) = toLower($category)` : ""}
+             RETURN count(m) AS total`,
+            { userId, category }
+          );
+          const total = countRows[0]?.total ?? 0;
+
+          const rows = await runRead<{
+            id: string; content: string; createdAt: string; updatedAt: string; categories: string[];
+          }>(
+            `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)
+             WHERE m.invalidAt IS NULL AND m.state <> 'deleted'
+             ${category ? `MATCH (m)-[:HAS_CATEGORY]->(cFilter:Category) WHERE toLower(cFilter.name) = toLower($category)` : ""}
+             OPTIONAL MATCH (m)-[:HAS_CATEGORY]->(c:Category)
+             WITH m, collect(c.name) AS categories
+             ORDER BY m.createdAt DESC
+             SKIP $offset
+             LIMIT $limit
+             RETURN m.id AS id, m.content AS content,
+                    m.createdAt AS createdAt, m.updatedAt AS updatedAt,
+                    categories`,
+            { userId, offset: effectiveOffset, limit: effectiveLimit, category }
+          );
+
+          console.log(`[MCP] search_memory browse done in ${Date.now() - t0}ms count=${rows.length} total=${total}`);
+
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                total,
+                offset: effectiveOffset,
+                limit: effectiveLimit,
+                results: rows.map((m) => ({
+                  id: m.id,
+                  memory: m.content,
+                  created_at: m.createdAt,
+                  updated_at: m.updatedAt,
+                  categories: m.categories ?? [],
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        // ── SEARCH MODE ───────────────────────────────────────────────────
+        const effectiveLimit = limit ?? 10;
+        console.log(`[MCP] search_memory search userId=${userId} query="${query}" limit=${effectiveLimit}`);
+
+        // Spec 02: hybrid search (BM25 + vector + RRF)
         const results = await hybridSearch(query, {
           userId,
           topK: effectiveLimit,
@@ -175,9 +296,9 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
           filtered = filtered.filter(r => r.createdAt >= created_after);
         }
 
-        console.log(`[MCP] search_memory done in ${Date.now() - t0}ms hits=${results.length} filtered=${filtered.length}`);
+        console.log(`[MCP] search_memory search done in ${Date.now() - t0}ms hits=${results.length} filtered=${filtered.length}`);
 
-        // Log access for each hit — batch write to avoid concurrent MERGE races
+        // Log access for each hit — fire-and-forget
         if (filtered.length > 0) {
           const now = new Date().toISOString();
           const ids = filtered.map(r => r.id);
@@ -195,24 +316,19 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
           content: [{
             type: "text",
             text: JSON.stringify({
-              // Relevance confidence indicator (Eval v4 Finding 3)
-              // When no BM25 matches and all RRF scores are below threshold,
-              // flag results as low-confidence so agents can decide whether to show them.
+              // Eval v4 Finding 3: low-confidence flag when no BM25 hit and scores are weak
               ...(filtered.length > 0 ? (() => {
                 const hasAnyTextHit = filtered.some(r => r.textRank !== null);
                 const maxScore = Math.max(...filtered.map(r => r.rrfScore));
-                // Confident when at least one BM25 hit exists, or when top RRF score
-                // is above the single-arm threshold (1/(K+1) ≈ 0.0164 for K=60).
                 const confident = hasAnyTextHit || maxScore > 0.02;
-                return { 
+                return {
                   confident,
-                  message: confident 
-                    ? "Found relevant results." 
-                    : "Found some results, but confidence is LOW. These might not be relevant to your query."
+                  message: confident
+                    ? "Found relevant results."
+                    : "Found some results, but confidence is LOW. These might not be relevant to your query.",
                 };
               })() : { confident: true, message: "No results found." }),
               results: filtered.map((r) => {
-                // Normalize RRF score to 0-1 range. Max possible RRF score is ~0.03278 (1/61 + 1/61)
                 const normalizedScore = Math.min(1.0, Math.round((r.rrfScore / 0.032786) * 100) / 100);
                 return {
                   id: r.id,
@@ -228,84 +344,10 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
             }, null, 2),
           }],
         };
-      } catch (e: any) {
-        console.error("Error searching memory:", e);
-        return { content: [{ type: "text", text: `Error searching memory: ${e.message}` }] };
-      }
-    }
-  );
-
-  // -------- list_memories --------
-  server.registerTool(
-    "list_memories",
-    {
-      description: "Retrieve stored memories, most recent first. Use when the user wants to review everything you remember, or when you need a broad overview rather than a targeted search. Supports pagination via limit/offset.",
-      inputSchema: listMemoriesSchema,
-    },
-    async ({ limit, offset, category }) => {
-      if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
-      if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
-
-      try {
-        const t0 = Date.now();
-        const effectiveLimit = Math.min(limit ?? 50, 200);
-        const effectiveOffset = offset ?? 0;
-        console.log(`[MCP] list_memories start for userId=${userId} limit=${effectiveLimit} offset=${effectiveOffset} category=${category}`);
-
-        // Get total count
-        const countRows = await runRead<{ total: number }>(
-          `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)
-           WHERE m.invalidAt IS NULL AND m.state <> 'deleted'
-           ${category ? `MATCH (m)-[:HAS_CATEGORY]->(cFilter:Category) WHERE toLower(cFilter.name) = toLower($category)` : ''}
-           RETURN count(m) AS total`,
-          { userId, category }
-        );
-        const total = countRows[0]?.total ?? 0;
-
-        // Get paginated memories with categories
-        const rows = await runRead<{
-          id: string;
-          content: string;
-          createdAt: string;
-          updatedAt: string;
-          categories: string[];
-        }>(
-          `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)
-           WHERE m.invalidAt IS NULL AND m.state <> 'deleted'
-           ${category ? `MATCH (m)-[:HAS_CATEGORY]->(cFilter:Category) WHERE toLower(cFilter.name) = toLower($category)` : ''}
-           OPTIONAL MATCH (m)-[:HAS_CATEGORY]->(c:Category)
-           WITH m, collect(c.name) AS categories
-           ORDER BY m.createdAt DESC
-           SKIP $offset
-           LIMIT $limit
-           RETURN m.id AS id, m.content AS content,
-                  m.createdAt AS createdAt, m.updatedAt AS updatedAt,
-                  categories`,
-          { userId, offset: effectiveOffset, limit: effectiveLimit, category }
-        );
-
-        console.log(`[MCP] list_memories done in ${Date.now() - t0}ms count=${rows.length} total=${total}`);
-
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              total,
-              offset: effectiveOffset,
-              limit: effectiveLimit,
-              memories: rows.map((m) => ({
-                id: m.id,
-                memory: m.content,
-                created_at: m.createdAt,
-                updated_at: m.updatedAt,
-                categories: m.categories ?? [],
-              })),
-            }, null, 2),
-          }],
-        };
-      } catch (e: any) {
-        console.error("Error listing memories:", e);
-        return { content: [{ type: "text", text: `Error getting memories: ${e.message}` }] };
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("Error in search_memory:", msg);
+        return { content: [{ type: "text", text: `Error searching memory: ${msg}` }] };
       }
     }
   );

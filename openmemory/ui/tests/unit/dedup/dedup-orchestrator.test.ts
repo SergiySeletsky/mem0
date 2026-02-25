@@ -30,7 +30,7 @@ const mockGetDedupConfig = getDedupConfig as jest.MockedFunction<typeof getDedup
 beforeEach(() => {
   jest.clearAllMocks();
   // Default: dedup enabled, threshold 0.75 (lowered from 0.85 for paraphrase catch)
-  mockGetDedupConfig.mockResolvedValue({ enabled: true, threshold: 0.75 });
+  mockGetDedupConfig.mockResolvedValue({ enabled: true, threshold: 0.75, azureThreshold: 0.55 });
   mockGetCached.mockReturnValue(null);
   mockPairHash.mockReturnValue("fake-hash");
   mockSetCached.mockImplementation(() => {});
@@ -86,7 +86,7 @@ describe("checkDeduplication orchestrator", () => {
   });
 
   it("ORCH_05: dedup disabled → always action: insert without calling findNearDuplicates", async () => {
-    mockGetDedupConfig.mockResolvedValue({ enabled: false, threshold: 0.75 });
+    mockGetDedupConfig.mockResolvedValue({ enabled: false, threshold: 0.75, azureThreshold: 0.55 });
 
     const result = await checkDeduplication("any text", "user-1");
 
@@ -94,19 +94,19 @@ describe("checkDeduplication orchestrator", () => {
     expect(mockFind).not.toHaveBeenCalled();
   });
 
-  it("ORCH_06: passes lowered threshold (0.75) to findNearDuplicates for paraphrase catch", async () => {
-    mockGetDedupConfig.mockResolvedValue({ enabled: true, threshold: 0.75 });
+  it("ORCH_06: passes lowered threshold (0.55) to findNearDuplicates for intelli-embed-v3 default", async () => {
+    mockGetDedupConfig.mockResolvedValue({ enabled: true, threshold: 0.75, azureThreshold: 0.55 });
     mockFind.mockResolvedValue([]);
 
     await checkDeduplication("A paraphrased version of ADR-003", "user-1");
 
-    // findNearDuplicates should receive the 0.75 threshold
-    expect(mockFind).toHaveBeenCalledWith("A paraphrased version of ADR-003", "user-1", 0.75);
+    // Default provider is intelli → uses azureThreshold (0.55) because v3 supSim=0.580
+    expect(mockFind).toHaveBeenCalledWith("A paraphrased version of ADR-003", "user-1", 0.55);
   });
 
   it("ORCH_07: paraphrase with score 0.80 is caught and sent to LLM verification", async () => {
     // Score 0.80 is above new threshold 0.75 but was below old threshold 0.85
-    mockGetDedupConfig.mockResolvedValue({ enabled: true, threshold: 0.75 });
+    mockGetDedupConfig.mockResolvedValue({ enabled: true, threshold: 0.75, azureThreshold: 0.55 });
     mockFind.mockResolvedValue([
       { id: "mem-orig", content: "We chose Memgraph as the database layer", score: 0.80 },
     ]);
@@ -122,13 +122,13 @@ describe("checkDeduplication orchestrator", () => {
     expect(mockVerify).toHaveBeenCalledTimes(1);
   });
 
-  it("ORCH_08: custom higher threshold from config is respected", async () => {
-    mockGetDedupConfig.mockResolvedValue({ enabled: true, threshold: 0.92 });
+  it("ORCH_08: custom higher threshold from config is respected for intelli provider", async () => {
+    mockGetDedupConfig.mockResolvedValue({ enabled: true, threshold: 0.92, azureThreshold: 0.60 });
     mockFind.mockResolvedValue([]);
 
     await checkDeduplication("test", "user-1");
 
-    // Config override should be passed through
-    expect(mockFind).toHaveBeenCalledWith("test", "user-1", 0.92);
+    // Default provider is intelli → uses azureThreshold (0.60)
+    expect(mockFind).toHaveBeenCalledWith("test", "user-1", 0.60);
   });
 });

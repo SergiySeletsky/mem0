@@ -7,23 +7,29 @@
  * (InMemoryTransport).
  *
  * Coverage:
- *   add_memory:
- *     MCP_ADD_01:    normal ADD path returns {id, memory, event: "ADD"}
- *     MCP_ADD_02:    dedup skip returns event: "SKIP_DUPLICATE"
- *     MCP_ADD_03:    dedup supersede returns event: "SUPERSEDE"
+ *   add_memories:
+ *     MCP_ADD_01:    single-string backward compat — ADD path returns {id, memory, event: "ADD"}
+ *     MCP_ADD_02:    single-string dedup skip returns event: "SKIP_DUPLICATE"
+ *     MCP_ADD_03:    single-string dedup supersede returns event: "SUPERSEDE"
  *     MCP_ADD_04:    fires entity extraction asynchronously
+ *     MCP_ADD_05:    array of strings: all items processed, returns one result per item
+ *     MCP_ADD_06:    array: per-item error isolation — failed item returns event "ERROR", others succeed
+ *     MCP_ADD_07:    empty array returns { results: [] } immediately
+ *     MCP_ADD_08:    array with mixed dedup outcomes (ADD + SKIP + SUPERSEDE)
  *
- *   search_memory:
+ *   search_memory (search mode):
  *     MCP_SM_01:     returns hybrid search results with score, text_rank, vector_rank
  *     MCP_SM_02:     category filter removes non-matching results
  *     MCP_SM_03:     created_after filter removes older results
  *     MCP_SM_04:     logs access via runWrite (non-blocking)
  *
- *   list_memories:
- *     MCP_LIST_01:   returns paginated shape { total, offset, limit, memories }
- *     MCP_LIST_02:   respects offset for pagination
- *     MCP_LIST_03:   clamps limit to max 200
- *     MCP_LIST_04:   includes categories per memory
+ *   search_memory (browse mode — no query):
+ *     MCP_SM_BROWSE_01:  no query returns paginated shape { total, offset, limit, results }
+ *     MCP_SM_BROWSE_02:  offset parameter is forwarded to SKIP clause
+ *     MCP_SM_BROWSE_03:  clamps limit to max 200
+ *     MCP_SM_BROWSE_04:  results include categories per memory
+ *     MCP_SM_BROWSE_05:  category filter applied in browse mode
+ *     MCP_SM_BROWSE_06:  empty string query also triggers browse mode
  *
  *   update_memory:
  *     MCP_UPD_01:    supersedes old memory with bi-temporal model
@@ -158,7 +164,7 @@ function parseToolResult(result: { content: Array<{ type: string; text?: string 
 }
 
 // ---------------------------------------------------------------------------
-describe("MCP Tool Handlers — add_memory", () => {
+describe("MCP Tool Handlers — add_memories", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -169,13 +175,13 @@ describe("MCP Tool Handlers — add_memory", () => {
     jest.clearAllMocks();
   });
 
-  it("MCP_ADD_01: normal ADD returns {id, memory, event: 'ADD'}", async () => {
+  it("MCP_ADD_01: single string backward compat — ADD returns {id, memory, event: 'ADD'}", async () => {
     mockCheckDeduplication.mockResolvedValueOnce({ action: "add" } as any);
     mockAddMemory.mockResolvedValueOnce("new-mem-id");
     mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
 
     const result = await client.callTool({
-      name: "add_memory",
+      name: "add_memories",
       arguments: { content: "Alice prefers TypeScript" },
     });
 
@@ -187,14 +193,14 @@ describe("MCP Tool Handlers — add_memory", () => {
     expect(mockAddMemory).toHaveBeenCalledTimes(1);
   });
 
-  it("MCP_ADD_02: dedup skip returns event: 'SKIP_DUPLICATE'", async () => {
+  it("MCP_ADD_02: single string dedup skip returns event: 'SKIP_DUPLICATE'", async () => {
     mockCheckDeduplication.mockResolvedValueOnce({
       action: "skip",
       existingId: "existing-id",
     } as any);
 
     const result = await client.callTool({
-      name: "add_memory",
+      name: "add_memories",
       arguments: { content: "Duplicate content" },
     });
 
@@ -204,7 +210,7 @@ describe("MCP Tool Handlers — add_memory", () => {
     expect(mockAddMemory).not.toHaveBeenCalled();
   });
 
-  it("MCP_ADD_03: dedup supersede returns event: 'SUPERSEDE'", async () => {
+  it("MCP_ADD_03: single string dedup supersede returns event: 'SUPERSEDE'", async () => {
     mockCheckDeduplication.mockResolvedValueOnce({
       action: "supersede",
       existingId: "old-id",
@@ -213,7 +219,7 @@ describe("MCP Tool Handlers — add_memory", () => {
     mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
 
     const result = await client.callTool({
-      name: "add_memory",
+      name: "add_memories",
       arguments: { content: "Updated preference" },
     });
 
@@ -229,12 +235,96 @@ describe("MCP Tool Handlers — add_memory", () => {
     mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
 
     await client.callTool({
-      name: "add_memory",
+      name: "add_memories",
       arguments: { content: "Entity test" },
     });
 
     // processEntityExtraction called with the new memory id
     expect(mockProcessEntityExtraction).toHaveBeenCalledWith("ext-mem-id");
+  });
+
+  it("MCP_ADD_05: array of strings processes all items, returns one result each", async () => {
+    mockCheckDeduplication
+      .mockResolvedValueOnce({ action: "add" } as any)
+      .mockResolvedValueOnce({ action: "add" } as any)
+      .mockResolvedValueOnce({ action: "add" } as any);
+    mockAddMemory
+      .mockResolvedValueOnce("id-1")
+      .mockResolvedValueOnce("id-2")
+      .mockResolvedValueOnce("id-3");
+    mockProcessEntityExtraction.mockResolvedValue(undefined);
+
+    const result = await client.callTool({
+      name: "add_memories",
+      arguments: { content: ["Fact one", "Fact two", "Fact three"] },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toHaveLength(3);
+    expect(parsed.results.map((r: any) => r.id)).toEqual(["id-1", "id-2", "id-3"]);
+    expect(parsed.results.every((r: any) => r.event === "ADD")).toBe(true);
+    expect(mockAddMemory).toHaveBeenCalledTimes(3);
+    expect(mockProcessEntityExtraction).toHaveBeenCalledTimes(3);
+  });
+
+  it("MCP_ADD_06: per-item error isolation — failed item has event 'ERROR', others succeed", async () => {
+    mockCheckDeduplication
+      .mockResolvedValueOnce({ action: "add" } as any)
+      .mockRejectedValueOnce(new Error("DB timeout"))
+      .mockResolvedValueOnce({ action: "add" } as any);
+    mockAddMemory
+      .mockResolvedValueOnce("ok-id-1")
+      .mockResolvedValueOnce("ok-id-3");
+    mockProcessEntityExtraction.mockResolvedValue(undefined);
+
+    const result = await client.callTool({
+      name: "add_memories",
+      arguments: { content: ["Good fact", "Bad fact", "Another good fact"] },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toHaveLength(3);
+    expect(parsed.results[0].event).toBe("ADD");
+    expect(parsed.results[1].event).toBe("ERROR");
+    expect(parsed.results[1].error).toBe("DB timeout");
+    expect(parsed.results[2].event).toBe("ADD");
+  });
+
+  it("MCP_ADD_07: empty array returns { results: [] } immediately", async () => {
+    const result = await client.callTool({
+      name: "add_memories",
+      arguments: { content: [] },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toEqual([]);
+    expect(mockCheckDeduplication).not.toHaveBeenCalled();
+    expect(mockAddMemory).not.toHaveBeenCalled();
+  });
+
+  it("MCP_ADD_08: array with mixed ADD + SKIP + SUPERSEDE outcomes", async () => {
+    mockCheckDeduplication
+      .mockResolvedValueOnce({ action: "add" } as any)
+      .mockResolvedValueOnce({ action: "skip", existingId: "dup-id" } as any)
+      .mockResolvedValueOnce({ action: "supersede", existingId: "old-id" } as any);
+    mockAddMemory.mockResolvedValueOnce("new-id");
+    mockSupersedeMemory.mockResolvedValueOnce("supersede-id");
+    mockProcessEntityExtraction.mockResolvedValue(undefined);
+
+    const result = await client.callTool({
+      name: "add_memories",
+      arguments: { content: ["new fact", "duplicate fact", "updated fact"] },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results[0].event).toBe("ADD");
+    expect(parsed.results[0].id).toBe("new-id");
+    expect(parsed.results[1].event).toBe("SKIP_DUPLICATE");
+    expect(parsed.results[1].id).toBe("dup-id");
+    expect(parsed.results[2].event).toBe("SUPERSEDE");
+    expect(parsed.results[2].id).toBe("supersede-id");
+    // entity extraction only for ADD and SUPERSEDE items
+    expect(mockProcessEntityExtraction).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -396,7 +486,7 @@ describe("MCP Tool Handlers — search_memory", () => {
 });
 
 // ---------------------------------------------------------------------------
-describe("MCP Tool Handlers — list_memories", () => {
+describe("MCP Tool Handlers — search_memory (browse mode)", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -407,30 +497,33 @@ describe("MCP Tool Handlers — list_memories", () => {
     jest.clearAllMocks();
   });
 
-  it("MCP_LIST_01: returns paginated shape { total, offset, limit, memories }", async () => {
-    // Mock count query
+  it("MCP_SM_BROWSE_01: no query returns paginated shape { total, offset, limit, results }", async () => {
     mockRunRead
-      .mockResolvedValueOnce([{ total: 3 }]) // count query
-      .mockResolvedValueOnce([                // paginated query
+      .mockResolvedValueOnce([{ total: 3 }])
+      .mockResolvedValueOnce([
         { id: "m1", content: "Memory one", createdAt: "2026-01-01", updatedAt: "2026-01-01", categories: ["work"] },
         { id: "m2", content: "Memory two", createdAt: "2026-01-02", updatedAt: "2026-01-02", categories: [] },
       ]);
 
     const result = await client.callTool({
-      name: "list_memories",
-      arguments: {},
+      name: "search_memory",
+      arguments: {},  // no query → browse mode
     });
 
     const parsed = parseToolResult(result as any) as any;
     expect(parsed).toHaveProperty("total", 3);
     expect(parsed).toHaveProperty("offset", 0);
     expect(parsed).toHaveProperty("limit", 50);
-    expect(parsed.memories).toHaveLength(2);
-    expect(parsed.memories[0]).toHaveProperty("id", "m1");
-    expect(parsed.memories[0]).toHaveProperty("memory", "Memory one");
+    expect(parsed.results).toHaveLength(2);
+    expect(parsed.results[0]).toHaveProperty("id", "m1");
+    expect(parsed.results[0]).toHaveProperty("memory", "Memory one");
+    expect(parsed.results[0]).toHaveProperty("created_at");
+    expect(parsed.results[0]).toHaveProperty("updated_at");
+    // browse mode must NOT call hybridSearch
+    expect(mockHybridSearch).not.toHaveBeenCalled();
   });
 
-  it("MCP_LIST_02: respects offset for pagination", async () => {
+  it("MCP_SM_BROWSE_02: offset parameter forwarded to SKIP clause", async () => {
     mockRunRead
       .mockResolvedValueOnce([{ total: 10 }])
       .mockResolvedValueOnce([
@@ -438,7 +531,7 @@ describe("MCP Tool Handlers — list_memories", () => {
       ]);
 
     const result = await client.callTool({
-      name: "list_memories",
+      name: "search_memory",
       arguments: { offset: 5, limit: 1 },
     });
 
@@ -446,19 +539,18 @@ describe("MCP Tool Handlers — list_memories", () => {
     expect(parsed.offset).toBe(5);
     expect(parsed.limit).toBe(1);
 
-    // Verify the Cypher query used SKIP $offset LIMIT $limit
     const paginationCypher = mockRunRead.mock.calls[1][0] as string;
     expect(paginationCypher).toContain("SKIP");
     expect(paginationCypher).toContain("LIMIT");
   });
 
-  it("MCP_LIST_03: clamps limit to max 200", async () => {
+  it("MCP_SM_BROWSE_03: clamps limit to max 200", async () => {
     mockRunRead
       .mockResolvedValueOnce([{ total: 0 }])
       .mockResolvedValueOnce([]);
 
     const result = await client.callTool({
-      name: "list_memories",
+      name: "search_memory",
       arguments: { limit: 9999 },
     });
 
@@ -466,7 +558,7 @@ describe("MCP Tool Handlers — list_memories", () => {
     expect(parsed.limit).toBe(200);
   });
 
-  it("MCP_LIST_04: includes categories per memory", async () => {
+  it("MCP_SM_BROWSE_04: results include categories per memory", async () => {
     mockRunRead
       .mockResolvedValueOnce([{ total: 1 }])
       .mockResolvedValueOnce([
@@ -474,40 +566,56 @@ describe("MCP Tool Handlers — list_memories", () => {
       ]);
 
     const result = await client.callTool({
-      name: "list_memories",
+      name: "search_memory",
       arguments: {},
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.memories[0].categories).toEqual(["architecture", "decisions"]);
+    expect(parsed.results[0].categories).toEqual(["architecture", "decisions"]);
 
-    // Verify Cypher joins Category nodes
     const cypher = mockRunRead.mock.calls[1][0] as string;
     expect(cypher).toContain("HAS_CATEGORY");
     expect(cypher).toContain("Category");
   });
 
-  it("MCP_LIST_05: supports category filter", async () => {
+  it("MCP_SM_BROWSE_05: category filter applied in browse mode", async () => {
     mockRunRead
       .mockResolvedValueOnce([{ total: 1 }])
       .mockResolvedValueOnce([
-        { id: "m1", content: "Test", createdAt: "2026-01-01", updatedAt: "2026-01-01", categories: ["work"] },
+        { id: "m1", content: "Test", createdAt: "2026-01-01", updatedAt: "2026-01-01", categories: ["security"] },
       ]);
 
     const result = await client.callTool({
-      name: "list_memories",
-      arguments: { category: "work" },
+      name: "search_memory",
+      arguments: { category: "security" },
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.memories).toHaveLength(1);
+    expect(parsed.results).toHaveLength(1);
 
-    // Verify Cypher filters by Category
     const countCypher = mockRunRead.mock.calls[0][0] as string;
     expect(countCypher).toContain("toLower(cFilter.name) = toLower($category)");
-    
     const listCypher = mockRunRead.mock.calls[1][0] as string;
     expect(listCypher).toContain("toLower(cFilter.name) = toLower($category)");
+  });
+
+  it("MCP_SM_BROWSE_06: empty string query also triggers browse mode", async () => {
+    mockRunRead
+      .mockResolvedValueOnce([{ total: 2 }])
+      .mockResolvedValueOnce([
+        { id: "m1", content: "A", createdAt: "2026-01-01", updatedAt: "2026-01-01", categories: [] },
+        { id: "m2", content: "B", createdAt: "2026-01-02", updatedAt: "2026-01-02", categories: [] },
+      ]);
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "   " },  // whitespace-only → browse mode
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed).toHaveProperty("total");
+    expect(parsed.results).toHaveLength(2);
+    expect(mockHybridSearch).not.toHaveBeenCalled();
   });
 });
 
