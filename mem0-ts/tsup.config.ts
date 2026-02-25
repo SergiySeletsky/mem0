@@ -9,7 +9,7 @@ const external = [
   "uuid",
   "pg",
   "zod",
-  "sqlite3",
+  "kuzu",
   "@qdrant/js-client-rest",
   "redis",
   "chromadb",
