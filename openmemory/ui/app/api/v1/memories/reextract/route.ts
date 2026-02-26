@@ -28,11 +28,17 @@ export async function POST(req: NextRequest) {
 
   // Fire-and-forget extraction for each
   let queued = 0;
+  const jobs: Promise<void>[] = [];
   for (const { id } of rows) {
-    processEntityExtraction(id).catch((e) =>
+    const job = processEntityExtraction(id).catch((e) =>
       console.warn("[reextract] worker error for", id, e?.message)
     );
+    jobs.push(job);
     queued++;
+  }
+
+  if (process.env.NODE_ENV === "test" || process.env.OPENMEMORY_SYNC_ENTITY_EXTRACTION === "1") {
+    await Promise.allSettled(jobs);
   }
 
   return NextResponse.json({ queued, user_id: userId });

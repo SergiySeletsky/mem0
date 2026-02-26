@@ -259,6 +259,43 @@ const result = await this.conn.query(
 const rows = await result.getAll();  // getAll() is async — must await
 ```
 
+---
+
+## Session 13 — Entity extraction stabilization + full e2e green
+
+### Objective
+- Continue fixing failing tests and runtime issues from Session 12, with focus on remaining `04-entities` e2e failures and build instability.
+
+### Changes Made
+- **`lib/entities/extract.ts`**
+  - Made LLM extraction fail-open when LLM client/config is unavailable by moving `getLLMClient()` into guarded `try` flow.
+  - Added entity output normalization (`name/type/description` sanitization) before downstream resolution.
+  - Added deterministic heuristic fallback extraction from memory text (capitalized token groups + dedup + stopword filter) so entities can still be produced without LLM credentials.
+- **`app/api/v1/memories/reextract/route.ts`**
+  - Added deterministic execution path for tests: collects extraction jobs and `await Promise.allSettled(jobs)` when `NODE_ENV === "test"` or `OPENMEMORY_SYNC_ENTITY_EXTRACTION === "1"`.
+- **`lib/entities/resolve.ts`**
+  - Fixed PERSON alias Cypher match expression precedence in Memgraph by parenthesizing string concatenation in `STARTS WITH` checks:
+    - `toLower(e.name) STARTS WITH (toLower($name) + ' ')`
+    - `toLower($name) STARTS WITH (toLower(e.name) + ' ')`
+  - This resolved worker failures (`Invalid types: bool and string for '+'`) that prevented entity node creation.
+
+### Root Causes Confirmed
+- Entity pipeline failures were caused by Memgraph Cypher precedence in PERSON alias matching, which surfaced once fallback extraction produced PERSON entities.
+- Broad e2e 500 failures in one run were infra-related (Memgraph container not running), not code regressions.
+- Build `<Html>` prerender failures were environment-driven during local runs with non-production env context; build succeeds under clean `NODE_ENV=production`.
+- Additional local build blocker (`Cannot find module './impl'`) came from corrupted workspace `next` package in pnpm store; fixed via reinstall.
+
+### Verification
+- `npx jest --config jest.e2e.config.ts tests/e2e/04-entities.test.ts --runInBand`: **PASS (5/5)**
+- `pnpm test:e2e` (with Memgraph running): **PASS (11/11 suites, 73/73 tests)**
+- `pnpm build` (with clean env: `NODE_ENV=production`, no `NEXT_RUNTIME`): **PASS**
+- Dependency repair command executed: `pnpm install --force` at workspace root.
+
+### Patterns
+- Memgraph Cypher operator precedence can misparse `STARTS WITH <expr> + ' '` as boolean/string arithmetic unless concatenation is explicitly parenthesized.
+- For e2e reliability on async fire-and-forget pipelines, provide a test-mode synchronous path behind env guard rather than relying on background completion timing.
+
+
 ### Memgraph Fixes
 
 - **Vector index DDL syntax**: `CREATE VECTOR INDEX name ON :Label(prop) WITH CONFIG {"dimension": N, "capacity": 100000, "metric": "cos"}` (NOT `OPTIONS {size:}`)
@@ -1281,6 +1318,37 @@ Python HTTP embed server approach:
 ### Files Created / Modified
 - scripts/embed_server.py (NEW): generic Python HTTP embed server for custom-arch models
 - scripts/export_jina_v5_onnx.py (NEW): ONNX export attempt (kept for doc; blocked by vmap)
+
+---
+
+## Session 27 -- Build blocker + API 500 cleanup (runtime environment)
+
+### Objective
+Close remaining TODOs from Session 13 continuation: fix recurring Next.js build/dev module errors, isolate API 500 cause in e2e, and re-validate full app quality gates.
+
+### Root Causes Confirmed
+- **Corrupted pnpm store artifacts for Next 15.2.4** in workspace root caused missing internal files (`next/dist/build/webpack-build/impl.js`, `next/dist/pages/_app.js`) and intermittent `MODULE_NOT_FOUND` during `build`/`dev`.
+- **Stale Node dev processes on ports 3000/3001** served broken runtime state; e2e default base URL (`http://localhost:3000`) hit stale server, producing false API 500s on entities endpoints.
+
+### Remediation
+- Ran dependency repair at workspace root:
+  - `pnpm install --force`
+  - `pnpm store prune` + `pnpm install --force`
+- Verified restored Next internals with `Test-Path` checks for:
+  - `next/dist/build/webpack-build/impl.js`
+  - `next/dist/pages/_app.js`
+- Killed stale Node listeners on 3000/3001 and started a fresh `my-v0-project` dev server.
+- Re-verified API flow directly (`POST /memories` -> `POST /memories/reextract` -> `GET /entities`) returned 200 with entity payload.
+
+### Verification
+- `npx jest --config jest.e2e.config.ts tests/e2e/04-entities.test.ts --runInBand`: **PASS (5/5)**
+- `npx jest --config jest.e2e.config.ts tests/e2e/06-search.test.ts --runInBand`: **PASS (8/8)**
+- `pnpm test:e2e`: **PASS (11/11 suites, 73/73 tests)**
+- `pnpm build` (`NODE_ENV=production`, no `NEXT_RUNTIME`): **PASS**
+
+### Patterns
+- If e2e failures appear only on API status and not on route code changes, first verify the process bound to `:3000` (stale server mismatch can masquerade as backend regressions).
+- For Next internal module-not-found in pnpm workspaces, validate package file existence under `node_modules/.pnpm/next@...` and recover with `pnpm store prune` + forced reinstall.
 - scripts/benchmark-embeddings.ts: Added spawnEmbedServer(), buildJinaV5SmallProvider(), block 16 in main()
 - imports: child_process.spawn added
 - Header comment updated to note Python subprocess usage

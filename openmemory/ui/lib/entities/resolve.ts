@@ -224,8 +224,8 @@ export async function resolveEntity(
       `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity)
        WHERE e.type = 'PERSON'
          AND (
-           toLower(e.name) STARTS WITH toLower($name) + ' '
-           OR toLower($name) STARTS WITH toLower(e.name) + ' '
+           toLower(e.name) STARTS WITH (toLower($name) + ' ')
+           OR toLower($name) STARTS WITH (toLower(e.name) + ' ')
          )
        RETURN e.id AS id, e.name AS name, e.type AS type,
               coalesce(e.description, '') AS description
