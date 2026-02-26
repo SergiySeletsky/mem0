@@ -20,6 +20,56 @@ export default tseslint.config(
     ],
   },
 
+  // CommonJS files — Node.js globals (require, module, console, process, etc.)
+  {
+    files: ["**/*.cjs"],
+    languageOptions: {
+      sourceType: "commonjs",
+      globals: {
+        require: "readonly",
+        module: "readonly",
+        exports: "readonly",
+        __dirname: "readonly",
+        __filename: "readonly",
+        process: "readonly",
+        console: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+        setInterval: "readonly",
+        clearInterval: "readonly",
+        Buffer: "readonly",
+        global: "readonly",
+      },
+    },
+    rules: {
+      // require() is the standard CJS import mechanism
+      "@typescript-eslint/no-require-imports": "off",
+      // Allow empty catch blocks in benchmark scripts (expected errors)
+      "no-empty": ["error", { allowEmptyCatch: true }],
+      // Allow unused vars prefixed with _
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+    },
+  },
+
+  // Plain JS config files (jest.config.js etc.) — Node.js globals
+  {
+    files: ["**/*.js"],
+    languageOptions: {
+      globals: {
+        module: "readonly",
+        exports: "readonly",
+        require: "readonly",
+        __dirname: "readonly",
+        __filename: "readonly",
+        process: "readonly",
+        console: "readonly",
+      },
+    },
+  },
+
   // TypeScript-specific overrides
   {
     files: ["**/*.ts", "**/*.tsx"],

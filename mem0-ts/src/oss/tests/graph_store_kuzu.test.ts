@@ -9,10 +9,10 @@
 
 import { KuzuGraphStore } from "../src/graph_stores/kuzu";
 import type {
-  GraphNode,
-  GraphEdge,
-  RelationTriple,
-  Subgraph,
+  GraphNode as _GraphNode,
+  GraphEdge as _GraphEdge,
+  RelationTriple as _RelationTriple,
+  Subgraph as _Subgraph,
 } from "../src/graph_stores/base";
 
 const DIM = 16;

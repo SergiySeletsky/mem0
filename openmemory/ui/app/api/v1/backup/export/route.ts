@@ -3,11 +3,10 @@
  * Returns all active memories as JSON
  * Spec 00: Memgraph port (no zip - simplified for single-backend)
  */
-import { NextResponse } from "next/server";
 import { runRead } from "@/lib/db/memgraph";
 
 export async function POST() {
-  const rows = await runRead(
+  const rows = await runRead<{ id: string; content: string; state: string; createdAt: string; metadata: string | null; embedding: string | null; userId: string; appName: string | null; categories: string[] }>(
     `MATCH (u:User)-[:HAS_MEMORY]->(m:Memory)
      WHERE m.state <> 'deleted'
      OPTIONAL MATCH (m)-[:CREATED_BY]->(a:App)
@@ -19,7 +18,7 @@ export async function POST() {
             collect(c.name) AS categories`,
     {}
   );
-  const memories = rows.map((r: any) => ({
+  const memories = rows.map((r) => ({
     id: r.id,
     content: r.content,
     state: r.state,

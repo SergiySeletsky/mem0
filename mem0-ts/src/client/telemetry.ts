@@ -1,4 +1,4 @@
-import type { TelemetryClient, TelemetryOptions } from "./telemetry.types";
+import type { TelemetryClient } from "./telemetry.types";
 
 const version = "2.1.36";
 
@@ -13,7 +13,7 @@ const POSTHOG_API_KEY = "phc_hgJkUVJFYtmaJqrvf6CYN67TIQ8yhXAkWzUn9AMU4yX";
 const POSTHOG_HOST = "https://us.i.posthog.com/i/v0/e/";
 
 // Simple hash function using random strings
-function generateHash(input: string): string {
+function generateHash(_input: string): string {
   const randomStr =
     Math.random().toString(36).substring(2, 15) +
     Math.random().toString(36).substring(2, 15);

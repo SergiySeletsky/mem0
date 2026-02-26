@@ -18,7 +18,6 @@ import {
 import {
   getFactRetrievalMessages,
   getUpdateMemoryMessages,
-  parseMessages,
   removeCodeBlocks,
 } from "../prompts";
 import { DummyHistoryManager } from "../storage/DummyHistoryManager";
@@ -208,7 +207,7 @@ export class Memory {
         this.telemetryId = await this.vectorStore.getUserId();
       }
       return this.telemetryId;
-    } catch (error) {
+    } catch {
       this.telemetryId = "anonymous";
       return this.telemetryId;
     }

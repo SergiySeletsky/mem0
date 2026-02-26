@@ -1,4 +1,3 @@
-import { Message } from "../types";
 import { SearchFilters } from "../types";
 
 export interface Entity {

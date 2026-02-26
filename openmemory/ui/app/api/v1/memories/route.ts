@@ -118,26 +118,27 @@ export async function GET(request: NextRequest) {
         app_name: mem.appName || null,
         categories: catNames,
         metadata_: mem.metadata ? JSON.parse(mem.metadata as string) : null,
-        valid_at: (mem as any).validAt || null,
-        invalid_at: (mem as any).invalidAt || null,
-        is_current: (mem as any).invalidAt == null,
+        valid_at: mem.validAt || null,
+        invalid_at: mem.invalidAt || null,
+        is_current: mem.invalidAt == null,
       });
     }
 
     return NextResponse.json(buildPageResponse(items, total, page, size));
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("GET /memories error:", e);
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }
 
 // ---------- POST /api/v1/memories ----------
 export async function POST(request: NextRequest) {
-  let body: any;
+  let body: { user_id: string; text: string; metadata?: Record<string, unknown>; infer?: boolean; app?: string };
   try {
     body = CreateMemoryRequestSchema.parse(await request.json());
-  } catch (e: any) {
-    return NextResponse.json({ detail: e.errors || e.message }, { status: 400 });
+  } catch (e: unknown) {
+    const detail = e instanceof Error && 'errors' in e ? (e as { errors: unknown }).errors : e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ detail }, { status: 400 });
   }
 
   try {
@@ -191,19 +192,20 @@ export async function POST(request: NextRequest) {
     processEntityExtraction(id).catch((e) => console.warn("[entity worker]", e));
 
     return NextResponse.json(rows[0] ?? { id });
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("POST /memories error:", e);
-    return NextResponse.json({ error: e.message || String(e) }, { status: 500 });
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }
 
 // ---------- DELETE /api/v1/memories ----------
 export async function DELETE(request: NextRequest) {
-  let body: any;
+  let body: { memory_ids: string[]; user_id: string };
   try {
     body = DeleteMemoriesRequestSchema.parse(await request.json());
-  } catch (e: any) {
-    return NextResponse.json({ detail: e.errors || e.message }, { status: 400 });
+  } catch (e: unknown) {
+    const detail = e instanceof Error && 'errors' in e ? (e as { errors: unknown }).errors : e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ detail }, { status: 400 });
   }
 
   try {
@@ -213,8 +215,8 @@ export async function DELETE(request: NextRequest) {
       if (ok) deletedCount++;
     }
     return NextResponse.json({ message: `Successfully deleted ${deletedCount} memories` });
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("DELETE /memories error:", e);
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }

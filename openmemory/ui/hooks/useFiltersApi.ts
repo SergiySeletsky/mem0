@@ -45,8 +45,8 @@ export const useFiltersApi = (): UseFiltersApiReturn => {
         total: response.data.total
       }));
       setIsLoading(false);
-    } catch (err: any) {
-      const errorMessage = err.message || 'Failed to fetch categories';
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch categories';
       setError(errorMessage);
       dispatch(setCategoriesError(errorMessage));
       setIsLoading(false);

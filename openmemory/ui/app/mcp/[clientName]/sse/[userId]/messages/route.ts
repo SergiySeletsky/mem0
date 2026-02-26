@@ -12,7 +12,7 @@ import { activeTransports } from "@/lib/mcp/registry";
 
 type RouteParams = { params: Promise<{ clientName: string; userId: string }> };
 
-export async function POST(request: NextRequest, { params }: RouteParams) {
+export async function POST(request: NextRequest, { params: _params }: RouteParams) {
   const sessionId = request.nextUrl.searchParams.get("sessionId");
   if (!sessionId) {
     return NextResponse.json({ error: "sessionId is required" }, { status: 400 });
@@ -27,7 +27,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const body = await request.json();
     transport.handlePostMessage(body);
     return new NextResponse(null, { status: 202 });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch (e: unknown) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }

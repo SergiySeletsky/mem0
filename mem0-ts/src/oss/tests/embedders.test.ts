@@ -75,7 +75,7 @@ describe("LMStudioEmbedder", () => {
   });
 
   it("should use lm-studio as default API key", () => {
-    const e = new LMStudioEmbedder({});
+    const _e = new LMStudioEmbedder({});
     const OpenAIMock = require("openai");
     const lastCall = OpenAIMock.mock.calls[OpenAIMock.mock.calls.length - 1][0];
     expect(lastCall.apiKey).toBe("lm-studio");
@@ -105,7 +105,7 @@ describe("LMStudioEmbedder", () => {
   });
 
   it("should accept custom base URL via config", () => {
-    const e = new LMStudioEmbedder({
+    const _e = new LMStudioEmbedder({
       lmstudioBaseUrl: "http://remote:9999/v1",
     } as any);
     const OpenAIMock = require("openai");

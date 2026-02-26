@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
   ]);
 
   const total = memRows[0]?.count;
-  const totalMemories = typeof total === "number" ? total : (total as any)?.low ?? 0;
+  const totalMemories = typeof total === "number" ? total : (total as { low?: number })?.low ?? 0;
 
   return NextResponse.json({
     total_memories: totalMemories,

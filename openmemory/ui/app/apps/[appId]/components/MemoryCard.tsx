@@ -7,7 +7,7 @@ interface MemoryCardProps {
   id: string;
   content: string;
   created_at: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   categories?: string[];
   access_count?: number;
   app_name: string;
@@ -48,7 +48,7 @@ export function MemoryCard({
 
         <div className="mb-2">
           <Categories
-            categories={categories as any}
+            categories={categories ?? []}
             isPaused={state !== "active"}
           />
         </div>

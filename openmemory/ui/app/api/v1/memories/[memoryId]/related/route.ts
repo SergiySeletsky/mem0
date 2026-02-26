@@ -35,7 +35,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   }
 
   // Safe to query related memories; also scope to same user
-  const rows = await runRead(
+  const rows = await runRead<{ id: string; content: string; state: string; createdAt: string; appName: string | null; categories: string[]; shared: number }>(
     `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memoryId})
      MATCH (u)-[:HAS_MEMORY]->(other:Memory)-[:HAS_CATEGORY]->(c:Category)<-[:HAS_CATEGORY]-(m)
      WHERE other.id <> $memoryId AND other.state = 'active'
@@ -48,7 +48,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     { userId: userId.trim(), memoryId, limit }
   );
   return NextResponse.json({
-    items: rows.map((r: any) => ({
+    items: rows.map((r) => ({
       id: r.id,
       content: r.content,
       created_at: r.createdAt ? Math.floor(new Date(r.createdAt).getTime() / 1000) : 0,

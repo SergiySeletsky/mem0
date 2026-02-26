@@ -13,7 +13,7 @@
  */
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const kuzu = require("kuzu") as typeof import("kuzu");
+const _kuzu = require("kuzu") as typeof import("kuzu");
 import neo4j from "neo4j-driver";
 import { performance } from "perf_hooks";
 import { KuzuVectorStore } from "../src/oss/src/vector_stores/kuzu";
@@ -191,7 +191,7 @@ async function benchmarkStore(name: string, store: VectorStore): Promise<void> {
     metric: "cos",
   });
   await benchmarkStore("KuzuVectorStore  (in-memory, brute-force cosine)", kuzuStore);
-  (kuzuStore as any).close?.();
+  (kuzuStore as unknown as { close?: () => void }).close?.();
 
   // ── Memgraph ──
   const reachable = await memgraphReachable();
@@ -208,7 +208,7 @@ async function benchmarkStore(name: string, store: VectorStore): Promise<void> {
       collectionName: "bench_vectors",
     });
     await benchmarkStore("MemgraphVectorStore (TCP bolt, HNSW vector index)", mgStore);
-    (mgStore as any).close?.();
+    (mgStore as unknown as { close?: () => void }).close?.();
   }
 
   console.log("\n" + "═".repeat(90));

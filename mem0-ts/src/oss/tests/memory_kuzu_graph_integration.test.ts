@@ -29,7 +29,7 @@ jest.mock("openai", () => {
 
 import { Memory } from "../src";
 import { SearchResult } from "../src/types";
-import type { GraphNode, GraphEdge, RelationTriple } from "../src/graph_stores/base";
+import type { GraphNode, GraphEdge, RelationTriple as _RelationTriple } from "../src/graph_stores/base";
 
 jest.setTimeout(60_000);
 

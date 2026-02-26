@@ -202,7 +202,7 @@ describe("TogetherLLM", () => {
   });
 
   it("should use together.xyz base URL", () => {
-    const llm = new TogetherLLM({ apiKey: "tog-key" });
+    const _llm = new TogetherLLM({ apiKey: "tog-key" });
     const OpenAIMock = require("openai");
     const lastCall = OpenAIMock.mock.calls[OpenAIMock.mock.calls.length - 1][0];
     expect(lastCall.baseURL).toBe("https://api.together.xyz/v1");
@@ -232,14 +232,14 @@ describe("TogetherLLM", () => {
 // ============ LMStudio LLM ============
 describe("LMStudioLLM", () => {
   it("should use localhost:1234 base URL by default", () => {
-    const llm = new LMStudioLLM({});
+    const _llm = new LMStudioLLM({});
     const OpenAIMock = require("openai");
     const lastCall = OpenAIMock.mock.calls[OpenAIMock.mock.calls.length - 1][0];
     expect(lastCall.baseURL).toBe("http://localhost:1234/v1");
   });
 
   it("should use lm-studio as default api key", () => {
-    const llm = new LMStudioLLM({});
+    const _llm = new LMStudioLLM({});
     const OpenAIMock = require("openai");
     const lastCall = OpenAIMock.mock.calls[OpenAIMock.mock.calls.length - 1][0];
     expect(lastCall.apiKey).toBe("lm-studio");
@@ -275,7 +275,7 @@ describe("LMStudioLLM", () => {
   });
 
   it("should accept custom base URL", () => {
-    const llm = new LMStudioLLM({ baseURL: "http://custom:5678/v1" });
+    const _llm = new LMStudioLLM({ baseURL: "http://custom:5678/v1" });
     const OpenAIMock = require("openai");
     const lastCall = OpenAIMock.mock.calls[OpenAIMock.mock.calls.length - 1][0];
     expect(lastCall.baseURL).toBe("http://custom:5678/v1");

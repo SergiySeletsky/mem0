@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
 
   const skip = (page - 1) * pageSize;
   const whereParts: string[] = [];
-  const queryParams: Record<string, any> = { userId: user_id, skip, limit: pageSize };
+  const queryParams: Record<string, unknown> = { userId: user_id, skip, limit: pageSize };
 
   // State filter
   if (stateFilter) {
@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
   const whereClause = whereParts.length > 0 ? `WHERE ${whereParts.join(" AND ")}` : "";
 
   const [rows, countRows] = await Promise.all([
-    runRead(
+    runRead<{ id: string; content: string; state?: string; createdAt?: string; metadata?: string; appName?: string; categories?: string[] }>(
       `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)
        OPTIONAL MATCH (m)-[:CREATED_BY]->(a:App)
        OPTIONAL MATCH (m)-[:HAS_CATEGORY]->(c:Category)
@@ -80,11 +80,11 @@ export async function POST(request: NextRequest) {
     ),
   ]);
 
-  const total = (countRows[0] as any)?.total ?? 0;
+  const total = (countRows[0] as { total?: number })?.total ?? 0;
   const pages = pageSize > 0 ? Math.ceil(total / pageSize) : 1;
 
   return NextResponse.json({
-    items: rows.map((r: any) => ({
+    items: rows.map((r) => ({
       id: r.id,
       content: r.content,
       created_at: r.createdAt ?? new Date(0).toISOString(),

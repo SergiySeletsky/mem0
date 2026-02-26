@@ -61,11 +61,11 @@ export async function processEntityExtraction(memoryId: string): Promise<void> {
       `MATCH (m:Memory {id: $memoryId}) SET m.extractionStatus = 'done'`,
       { memoryId }
     );
-  } catch (e: any) {
+  } catch (e: unknown) {
     await runWrite(
       `MATCH (m:Memory {id: $memoryId})
        SET m.extractionStatus = 'failed', m.extractionError = $error`,
-      { memoryId, error: e.message ?? String(e) }
+      { memoryId, error: e instanceof Error ? e.message : String(e) }
     );
   }
 }

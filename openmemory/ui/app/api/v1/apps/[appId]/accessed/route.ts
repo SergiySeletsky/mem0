@@ -15,7 +15,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   const pageSize = parseInt(url.searchParams.get("page_size") || "20", 10);
   const skip = (page - 1) * pageSize;
 
-  const rows = await runRead(
+  const rows = await runRead<{ id: string; content: string; state?: string; createdAt?: string; metadata?: string; app_name?: string; categories?: string[]; accessed_at?: string; query_used?: string }>(
     `MATCH (a:App)-[acc:ACCESSED]->(m:Memory)
      WHERE (a.appName = $appId OR a.id = $appId)
      WITH m, a, acc
@@ -32,10 +32,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     `MATCH (a:App)-[acc:ACCESSED]->(:Memory) WHERE (a.appName = $appId OR a.id = $appId) RETURN count(acc) AS total`,
     { appId }
   );
-  const total = (countRows[0] as any)?.total ?? 0;
+  const total = (countRows[0] as { total?: number })?.total ?? 0;
   return NextResponse.json({
     total, page, page_size: pageSize,
-    memories: rows.map((r: any) => ({
+    memories: rows.map((r) => ({
       memory: {
         id: r.id,
         content: r.content,
@@ -54,8 +54,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       access_count: 1,
     })),
   });
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("[apps/accessed]", e);
-    return NextResponse.json({ detail: e.message }, { status: 500 });
+    return NextResponse.json({ detail: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }

@@ -8,7 +8,11 @@ import { runRead, runWrite } from "@/lib/db/memgraph";
 
 export function getDefaultConfiguration() {
   return {
-    openmemory: {} as Record<string, never>,
+    openmemory: {} as {
+      dedup?: { enabled?: boolean; threshold?: number; azureThreshold?: number };
+      context_window?: { enabled?: boolean; size?: number };
+      [key: string]: unknown;
+    },
 
     mem0: {
       vector_store: null as Record<string, unknown> | null,
@@ -21,12 +25,12 @@ export type AppConfig = ReturnType<typeof getDefaultConfiguration>;
 /** Read full config from Memgraph, merging with defaults. */
 export async function getConfigFromDb(): Promise<AppConfig> {
   try {
-    const rows = await runRead(
+    const rows = await runRead<{ key: string; value: string }>(
       `MATCH (c:Config) RETURN c.key AS key, c.value AS value`,
       {}
     );
-    const result: Record<string, any> = {};
-    for (const r of rows as any[]) {
+    const result: Record<string, unknown> = {};
+    for (const r of rows) {
       try {
         result[r.key] = JSON.parse(r.value);
       } catch {
@@ -35,8 +39,8 @@ export async function getConfigFromDb(): Promise<AppConfig> {
     }
     const defaults = getDefaultConfiguration();
     return {
-      openmemory: result.openmemory ?? defaults.openmemory,
-      mem0: result.mem0 ?? defaults.mem0,
+      openmemory: (result.openmemory as AppConfig["openmemory"]) ?? defaults.openmemory,
+      mem0: (result.mem0 as AppConfig["mem0"]) ?? defaults.mem0,
     };
   } catch {
     return getDefaultConfiguration();
@@ -54,7 +58,7 @@ export async function saveConfigToDb(config: AppConfig): Promise<AppConfig> {
   return config;
 }
 
-export function deepUpdate(source: any, overrides: any): any {
+export function deepUpdate(source: Record<string, unknown>, overrides: Record<string, unknown>): Record<string, unknown> {
   for (const key of Object.keys(overrides)) {
     if (
       typeof overrides[key] === "object" &&
@@ -63,7 +67,7 @@ export function deepUpdate(source: any, overrides: any): any {
       typeof source[key] === "object" &&
       source[key] !== null
     ) {
-      source[key] = deepUpdate(source[key], overrides[key]);
+      source[key] = deepUpdate(source[key] as Record<string, unknown>, overrides[key] as Record<string, unknown>);
     } else {
       source[key] = overrides[key];
     }
@@ -91,7 +95,7 @@ export interface DedupConfig {
  */
 export async function getDedupConfig(): Promise<DedupConfig> {
   try {
-    const raw = await getConfigFromDb() as any;
+    const raw = await getConfigFromDb();
     const dedupCfg = raw?.openmemory?.dedup ?? {};
     return {
       enabled: dedupCfg.enabled ?? true,
@@ -118,7 +122,7 @@ export interface ContextWindowConfig {
  */
 export async function getContextWindowConfig(): Promise<ContextWindowConfig> {
   try {
-    const raw = await getConfigFromDb() as any;
+    const raw = await getConfigFromDb();
     const ctx = raw?.openmemory?.context_window ?? {};
     return {
       enabled: ctx.enabled ?? true,

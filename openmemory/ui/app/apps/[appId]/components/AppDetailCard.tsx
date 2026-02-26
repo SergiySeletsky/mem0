@@ -18,13 +18,13 @@ const AppDetailCard = ({
   selectedApp,
 }: {
   appId: string;
-  selectedApp: any;
+  selectedApp: RootState['apps']['selectedApp'];
 }) => {
   const { updateAppDetails } = useAppsApi();
   const [isLoading, setIsLoading] = useState(false);
   const dispatch = useDispatch();
   const apps = useSelector((state: RootState) => state.apps.apps);
-  const currentApp = apps.find((app: any) => app.id === appId);
+  const currentApp = apps.find((app) => app.id === appId);
   const appConfig = currentApp
     ? constants[currentApp.name as keyof typeof constants] || constants.default
     : constants.default;
@@ -33,10 +33,10 @@ const AppDetailCard = ({
     setIsLoading(true);
     try {
       await updateAppDetails(appId, {
-        is_active: !selectedApp.details.is_active,
+        is_active: !selectedApp.details?.is_active,
       });
       dispatch(
-        setAppDetails({ appId, isActive: !selectedApp.details.is_active })
+        setAppDetails({ appId, isActive: !selectedApp.details?.is_active })
       );
     } catch (error) {
       console.error("Failed to toggle app pause state:", error);
@@ -45,7 +45,7 @@ const AppDetailCard = ({
     }
   };
 
-  const buttonText = selectedApp.details.is_active
+  const buttonText = selectedApp.details?.is_active
     ? "Pause Access"
     : "Unpause Access";
 
@@ -79,13 +79,13 @@ const AppDetailCard = ({
             <p className="text-xs text-zinc-400">Access Status</p>
             <p
               className={`font-medium ${
-                selectedApp.details.is_active
+                selectedApp.details?.is_active
                   ? "text-emerald-500"
                   : "text-red-500"
               }`}
             >
               {capitalize(
-                selectedApp.details.is_active ? "active" : "inactive"
+                selectedApp.details?.is_active ? "active" : "inactive"
               )}
             </p>
           </div>
@@ -93,21 +93,21 @@ const AppDetailCard = ({
           <div>
             <p className="text-xs text-zinc-400">Total Memories Created</p>
             <p className="font-medium">
-              {selectedApp.details.total_memories_created} Memories
+              {selectedApp.details?.total_memories_created} Memories
             </p>
           </div>
 
           <div>
             <p className="text-xs text-zinc-400">Total Memories Accessed</p>
             <p className="font-medium">
-              {selectedApp.details.total_memories_accessed} Memories
+              {selectedApp.details?.total_memories_accessed} Memories
             </p>
           </div>
 
           <div>
             <p className="text-xs text-zinc-400">First Accessed</p>
             <p className="font-medium">
-              {selectedApp.details.first_accessed
+              {selectedApp.details?.first_accessed
                 ? new Date(
                     selectedApp.details.first_accessed
                   ).toLocaleDateString("en-US", {
@@ -124,7 +124,7 @@ const AppDetailCard = ({
           <div>
             <p className="text-xs text-zinc-400">Last Accessed</p>
             <p className="font-medium">
-              {selectedApp.details.last_accessed
+              {selectedApp.details?.last_accessed
                 ? new Date(
                     selectedApp.details.last_accessed
                   ).toLocaleDateString("en-US", {

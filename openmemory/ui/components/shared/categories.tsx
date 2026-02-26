@@ -77,7 +77,7 @@ const iconMap: Record<string, any> = {
   places: <Globe className="w-4 h-4 mr-2" />,
 };
 
-const getClosestIcon = (label: string): any => {
+const _getClosestIcon = (label: string): React.ReactNode => {
   const normalized = label.toLowerCase().split(/[\s\-_.]+/);
 
   let bestMatch: string | null = null;

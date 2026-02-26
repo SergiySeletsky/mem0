@@ -9,9 +9,9 @@ const CONFIG_KEY = "mem0_vector_store";
 const DEFAULT = { provider: "memgraph", config: { url: process.env.MEMGRAPH_URL ?? "bolt://localhost:7687" } };
 
 export async function GET() {
-  const rows = await runRead(`MATCH (c:Config {key: $key}) RETURN c.value AS value`, { key: CONFIG_KEY });
+  const rows = await runRead<{ value: string }>(`MATCH (c:Config {key: $key}) RETURN c.value AS value`, { key: CONFIG_KEY });
   if (!rows.length) return NextResponse.json(DEFAULT);
-  try { return NextResponse.json(JSON.parse((rows[0] as any).value)); } catch { return NextResponse.json(DEFAULT); }
+  try { return NextResponse.json(JSON.parse(rows[0].value)); } catch { return NextResponse.json(DEFAULT); }
 }
 
 export async function PUT(request: NextRequest) {

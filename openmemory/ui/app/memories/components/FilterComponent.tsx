@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Filter, X, ChevronDown, SortAsc, SortDesc } from "lucide-react";
+import { Filter, ChevronDown, SortAsc, SortDesc } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
 
 import {

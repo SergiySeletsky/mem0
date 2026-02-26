@@ -6,7 +6,7 @@ interface ProfileState {
   totalApps: number;
   status: 'idle' | 'loading' | 'succeeded' | 'failed';
   error: string | null;
-  apps: any[];
+  apps: { id: string; name: string }[];
 }
 
 const initialState: ProfileState = {
@@ -44,7 +44,7 @@ const profileSlice = createSlice({
     setTotalApps: (state, action: PayloadAction<number>) => {
       state.totalApps = action.payload;
     },
-    setApps: (state, action: PayloadAction<any[]>) => {
+    setApps: (state, action: PayloadAction<{ id: string; name: string }[]>) => {
       state.apps = action.payload;
     }
   },

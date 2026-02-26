@@ -19,7 +19,7 @@ interface MemoryDetailsProps {
 
 export function MemoryDetails({ memory_id }: MemoryDetailsProps) {
   const router = useRouter();
-  const { fetchMemoryById, hasUpdates } = useMemoriesApi();
+  const { fetchMemoryById, hasUpdates: _hasUpdates } = useMemoriesApi();
   const memory = useSelector(
     (state: RootState) => state.memories.selectedMemory
   );

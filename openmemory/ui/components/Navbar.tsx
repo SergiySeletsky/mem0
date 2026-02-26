@@ -22,7 +22,7 @@ export function Navbar() {
   // Define route matchers with typed parameter extraction
   const routeBasedFetchMapping: {
     match: RegExp;
-    getFetchers: (params: Record<string, string>) => (() => Promise<any>)[];
+    getFetchers: (params: Record<string, string>) => (() => Promise<unknown>)[];
   }[] = [
     {
       match: /^\/memory\/([^/]+)$/,

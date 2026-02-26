@@ -8,12 +8,12 @@ export class DummyHistoryManager {
     action: string,
     createdAt?: string,
     updatedAt?: string,
-    isDeleted: number = 0,
+    _isDeleted: number = 0,
   ): Promise<void> {
     return;
   }
 
-  async getHistory(memoryId: string): Promise<any[]> {
+  async getHistory(_memoryId: string): Promise<any[]> {
     return [];
   }
 

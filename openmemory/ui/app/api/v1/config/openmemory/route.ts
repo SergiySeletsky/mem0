@@ -8,9 +8,9 @@ import { runRead, runWrite } from "@/lib/db/memgraph";
 const CONFIG_KEY = "openmemory_config";
 
 export async function GET() {
-  const rows = await runRead(`MATCH (c:Config {key: $key}) RETURN c.value AS value`, { key: CONFIG_KEY });
+  const rows = await runRead<{ value: string }>(`MATCH (c:Config {key: $key}) RETURN c.value AS value`, { key: CONFIG_KEY });
   if (!rows.length) return NextResponse.json({});
-  try { return NextResponse.json(JSON.parse((rows[0] as any).value)); } catch { return NextResponse.json({}); }
+  try { return NextResponse.json(JSON.parse(rows[0].value)); } catch { return NextResponse.json({}); }
 }
 
 export async function PUT(request: NextRequest) {

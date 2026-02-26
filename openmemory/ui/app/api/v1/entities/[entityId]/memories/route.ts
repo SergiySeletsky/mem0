@@ -46,8 +46,8 @@ export async function GET(
     const total = (countRows[0]?.total as number) ?? 0;
 
     return NextResponse.json({ memories: rows, total, page, size });
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("GET /entities/[entityId]/memories error:", e);
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }

@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
   const userId = url.searchParams.get("user_id");
   if (!userId) return NextResponse.json({ detail: "user_id required" }, { status: 400 });
 
-  const rows = await runRead(
+  const rows = await runRead<{ name: string; id: string; is_active: boolean; created_at: string; memory_count: number }>(
     `MATCH (u:User {userId: $userId})-[:HAS_APP]->(a:App)
      OPTIONAL MATCH (u)-[:HAS_MEMORY]->(m:Memory)-[:CREATED_BY]->(a)
      WHERE m.state = 'active'
@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
     { userId }
   );
   return NextResponse.json({
-    apps: rows.map((r: any) => ({
+    apps: rows.map((r) => ({
       id: r.id,
       name: r.name,
       is_active: r.is_active !== false,

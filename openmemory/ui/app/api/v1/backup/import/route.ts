@@ -10,7 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { bulkAddMemories } from "@/lib/memory/bulk";
 
 export async function POST(request: NextRequest) {
-  let data: any;
+  let data: { memories?: Array<{ content: string; user_id?: string; created_at?: string }> };
   const contentType = request.headers.get("content-type") || "";
   if (contentType.includes("multipart/form-data")) {
     const form = await request.formData();
@@ -23,13 +23,13 @@ export async function POST(request: NextRequest) {
     data = await request.json();
   }
 
-  const memories: any[] = data.memories || [];
+  const memories = data.memories || [];
   if (memories.length === 0) {
     return NextResponse.json({ message: "Import complete", imported: 0, failed: 0, total: 0 });
   }
 
   // Group memories by userId so we can call bulkAddMemories once per user.
-  const byUser = new Map<string, any[]>();
+  const byUser = new Map<string, typeof memories>();
   for (const mem of memories) {
     const uid = mem.user_id || "default_user";
     if (!byUser.has(uid)) byUser.set(uid, []);
@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
   let failed = 0;
 
   for (const [userId, userMemories] of byUser.entries()) {
-    const items = userMemories.map((m: any) => ({
+    const items = userMemories.map((m) => ({
       text: m.content as string,
       valid_at: m.created_at as string | undefined,
     }));

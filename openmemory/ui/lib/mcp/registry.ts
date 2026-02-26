@@ -8,7 +8,6 @@
 import type { NextSSETransport } from "./transport";
 
 declare global {
-  // eslint-disable-next-line no-var
   var __mcpTransports: Map<string, NextSSETransport> | undefined;
 }
 

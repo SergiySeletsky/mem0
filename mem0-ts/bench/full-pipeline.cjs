@@ -322,11 +322,11 @@ class MemgraphBackend {
  * Simulate Memory.add() with per-phase timing.
  * Returns { t_vectorSearch, t_vectorInsert, t_historyWrite, t_total }
  */
-async function simulateAdd(backend, userId, roundNum) {
+async function simulateAdd(backend, userId, _roundNum) {
   const t0_total = performance.now();
 
   // ── Phase 1: embed input (MOCKED — would be ~80ms with OpenAI) ──
-  const inputVec = mockEmbed();
+  mockEmbed();
 
   // ── Phase 2: LLM extractFacts (MOCKED — would be ~600ms with OpenAI) ──
   const facts = mockExtractFacts();

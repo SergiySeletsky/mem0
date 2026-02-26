@@ -8,7 +8,7 @@
  * and returns { results: [{ id, event, memory }] }.
  */
 
-import { api, asObj, asArr, MemoryTracker, RUN_ID } from "./helpers";
+import { api, asObj, MemoryTracker, RUN_ID } from "./helpers";
 
 const USER = `bulk-${RUN_ID}`;
 const APP = `e2e-bulk-app`;

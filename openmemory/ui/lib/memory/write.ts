@@ -317,7 +317,7 @@ export async function deleteAllMemories(
 
   const rows = await runWrite(query, params);
   const raw = rows[0]?.deleted;
-  return typeof raw === "number" ? raw : (raw as any)?.low ?? 0;
+  return typeof raw === "number" ? raw : (raw as { low?: number })?.low ?? 0;
 }
 
 // ---------------------------------------------------------------------------

@@ -18,11 +18,12 @@ const SearchRequestSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  let body: any;
+  let body: { query: string; user_id: string; app_name: string; top_k: number; mode: "hybrid" | "text" | "vector" };
   try {
     body = SearchRequestSchema.parse(await req.json());
-  } catch (e: any) {
-    return NextResponse.json({ detail: e.errors ?? e.message }, { status: 400 });
+  } catch (e: unknown) {
+    const detail = e instanceof Error && 'errors' in e ? (e as { errors: unknown }).errors : e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ detail }, { status: 400 });
   }
 
   try {
@@ -52,8 +53,8 @@ export async function POST(req: NextRequest) {
       results,
       total: results.length,
     });
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("POST /memories/search error:", e);
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }

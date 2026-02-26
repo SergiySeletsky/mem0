@@ -122,7 +122,7 @@ export class LangchainLLM implements LLM {
             { name: tools?.[0]?.function.name },
           );
           isStructuredOutput = true;
-        } catch (e) {
+        } catch {
           isStructuredOutput = false; // Ensure flag is false on error
           // No fallback to response_format here unless explicitly passed
           if (response_format?.type === "json_object") {

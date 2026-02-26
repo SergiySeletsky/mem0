@@ -1,4 +1,4 @@
-import axios from "axios";
+import axios, { type AxiosInstance } from "axios";
 import {
   AllUsers,
   ProjectOptions,
@@ -42,10 +42,10 @@ export default class MemoryClient {
   organizationId: string | number | null;
   projectId: string | number | null;
   headers: Record<string, string>;
-  client: any;
+  client: AxiosInstance;
   telemetryId: string;
 
-  _validateApiKey(): any {
+  _validateApiKey(): void {
     if (!this.apiKey) {
       throw new Error("Mem0 API key is required");
     }
@@ -122,29 +122,30 @@ export default class MemoryClient {
       captureClientEvent("init", this, {
         api_version: "v1",
         client_type: "MemoryClient",
-      }).catch((error: any) => {
+      }).catch((error: unknown) => {
         console.error("Failed to capture event:", error);
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to initialize client:", error);
       await captureClientEvent("init_error", this, {
-        error: error?.message || "Unknown error",
-        stack: error?.stack || "No stack trace",
+        error: error instanceof Error ? error.message : "Unknown error",
+        stack: error instanceof Error ? error.stack ?? "No stack trace" : "No stack trace",
       });
     }
   }
 
-  private _captureEvent(methodName: string, args: any[]) {
+  private _captureEvent(methodName: string, args: unknown[]) {
     captureClientEvent(methodName, this, {
       success: true,
       args_count: args.length,
-      keys: args.length > 0 ? args[0] : [],
-    }).catch((error: any) => {
+      keys: (args.length > 0 ? args[0] : []) as string[],
+    }).catch((error: unknown) => {
       console.error("Failed to capture event:", error);
     });
   }
 
-  async _fetchWithErrorHandling(url: string, options: any): Promise<any> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic fetch wrapper returns diverse response shapes
+  async _fetchWithErrorHandling(url: string, options: RequestInit): Promise<any> {
     const response = await fetch(url, {
       ...options,
       headers: {
@@ -162,7 +163,7 @@ export default class MemoryClient {
   }
 
   _preparePayload(messages: Array<Message>, options: MemoryOptions): object {
-    const payload: any = {};
+    const payload: Record<string, unknown> = {};
     payload.messages = messages;
     return { ...payload, ...options };
   }
@@ -199,13 +200,13 @@ export default class MemoryClient {
       if (org_id && !this.organizationId) this.organizationId = org_id;
       if (project_id && !this.projectId) this.projectId = project_id;
       if (user_email) this.telemetryId = user_email;
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Convert generic errors to APIError with meaningful messages
       if (error instanceof APIError) {
         throw error;
       } else {
         throw new APIError(
-          `Failed to ping server: ${error.message || "Unknown error"}`,
+          `Failed to ping server: ${error instanceof Error ? error.message : "Unknown error"}`,
         );
       }
     }
@@ -531,9 +532,9 @@ export default class MemoryClient {
             params: requestOptions,
           },
         );
-      } catch (error: any) {
+      } catch (error: unknown) {
         throw new APIError(
-          `Failed to delete ${entity.type} ${entity.name}: ${error.message}`,
+          `Failed to delete ${entity.type} ${entity.name}: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     }

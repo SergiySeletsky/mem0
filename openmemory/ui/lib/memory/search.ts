@@ -27,6 +27,8 @@ export interface SearchResult {
   appName?: string;
   metadata?: string;
   score?: number;
+  validAt?: string;
+  invalidAt?: string;
 }
 
 export interface ListOptions {
@@ -181,7 +183,7 @@ export async function listMemories(
   ]);
 
   const raw = countRows[0]?.total;
-  const total = typeof raw === "number" ? raw : (raw as any)?.low ?? 0;
+  const total = typeof raw === "number" ? raw : (raw as { low?: number })?.low ?? 0;
 
   return { memories, total };
 }

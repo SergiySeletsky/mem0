@@ -54,10 +54,9 @@ beforeAll(async () => {
   memgraphAvailable = await isMemgraphAvailable();
 });
 
-const describeIfMemgraph = (): jest.Describe =>
+const _describeIfMemgraph = (): jest.Describe =>
   memgraphAvailable ? describe : describe.skip;
 
-// eslint-disable-next-line jest/valid-title
 describe("MemgraphGraphStore", () => {
   let store: InstanceType<typeof MemgraphGraphStore>;
   let testCounter = 0;

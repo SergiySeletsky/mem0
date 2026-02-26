@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Category, Client } from "../../../components/types";
+import { Category, Client, Memory } from "../../../components/types";
 import { MemoryTable } from "./MemoryTable";
 import { MemoryPagination } from "./MemoryPagination";
 import { CreateMemoryDialog } from "./CreateMemoryDialog";
@@ -13,7 +13,7 @@ export function MemoriesSection() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { fetchMemories } = useMemoriesApi();
-  const [memories, setMemories] = useState<any[]>([]);
+  const [memories, setMemories] = useState<Memory[]>([]);
   const [totalItems, setTotalItems] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [isLoading, setIsLoading] = useState(true);

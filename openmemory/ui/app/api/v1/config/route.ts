@@ -6,19 +6,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runRead, runWrite } from "@/lib/db/memgraph";
 
-async function getConfig(): Promise<Record<string, any>> {
-  const rows = await runRead(
+async function getConfig(): Promise<Record<string, unknown>> {
+  const rows = await runRead<{ key: string; value: string }>(
     `MATCH (c:Config) RETURN c.key AS key, c.value AS value`,
     {}
   );
-  const result: Record<string, any> = {};
-  for (const r of rows as any[]) {
+  const result: Record<string, unknown> = {};
+  for (const r of rows) {
     try { result[r.key] = JSON.parse(r.value); } catch { result[r.key] = r.value; }
   }
   return result;
 }
 
-async function setConfig(updates: Record<string, any>): Promise<void> {
+async function setConfig(updates: Record<string, unknown>): Promise<void> {
   for (const [key, value] of Object.entries(updates)) {
     await runWrite(
       `MERGE (c:Config {key: $key}) SET c.value = $value`,

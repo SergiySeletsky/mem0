@@ -8,8 +8,8 @@ export interface AppMemory {
   updated_at: string;
   deleted_at: string | null;
   app_id: string;
-  vector: any;
-  metadata_: Record<string, any>;
+  vector: number[] | null;
+  metadata_: Record<string, unknown>;
   created_at: string;
   archived_at: string | null;
   categories: string[];

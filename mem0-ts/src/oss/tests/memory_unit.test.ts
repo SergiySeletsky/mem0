@@ -45,7 +45,7 @@ function mockLLMFactExtraction(facts: string[]) {
   });
 }
 
-function mockLLMRelations(relations: any[]) {
+function _mockLLMRelations(relations: any[]) {
   // For the update/dedup call
   mockChatCreate.mockResolvedValue({
     choices: [

@@ -21,7 +21,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ detail: "user_id is required" }, { status: 400 });
   }
   // Spec 09: anchored traversal — Memory unreachable from wrong User returns [] → 404
-  const rows = await runRead(
+  const rows = await runRead<{ id: string; content: string; state: string; createdAt: string; metadata: string | null; validAt: string | null; invalidAt: string | null; appName: string | null; categories: string[]; supersededBy: string | null }>(
     `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memoryId})
      OPTIONAL MATCH (m)-[:CREATED_BY]->(a:App)
      OPTIONAL MATCH (m)-[:HAS_CATEGORY]->(c:Category)
@@ -36,7 +36,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   if (!rows.length) {
     return NextResponse.json({ detail: "Memory not found" }, { status: 404 });
   }
-  const r = rows[0] as any;
+  const r = rows[0];
   return NextResponse.json({
     id: r.id,
     text: r.content,
@@ -73,7 +73,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
   // Spec 01: use temporal supersession instead of in-place update
   const newId = await supersedeMemory(memoryId, text, user_id, app_name);
   // Spec 09: anchored lookup of the just-created node
-  const rows = await runRead(
+  const rows = await runRead<{ id: string; content: string; state: string; createdAt: string; validAt: string | null; metadata: string | null; appName: string | null; categories: string[] }>(
     `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $id})
      OPTIONAL MATCH (m)-[:CREATED_BY]->(a:App)
      OPTIONAL MATCH (m)-[:HAS_CATEGORY]->(c:Category)
@@ -83,7 +83,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
             a.appName AS appName, collect(c.name) AS categories`,
     { userId: user_id, id: newId }
   );
-  const r = (rows[0] as any) ?? { id: newId, content: text };
+  const r = rows[0] ?? { id: newId, content: text, state: "active", createdAt: "", validAt: null, metadata: null, appName: null, categories: [] as string[] };
   return NextResponse.json({
     id: r.id ?? newId,
     content: r.content ?? text,

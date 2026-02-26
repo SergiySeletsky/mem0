@@ -13,8 +13,8 @@ export class GoogleLLM implements LLM {
 
   async generateResponse(
     messages: Message[],
-    responseFormat?: { type: string },
-    tools?: any[],
+    _responseFormat?: { type: string },
+    _tools?: any[],
   ): Promise<string | LLMResponse> {
     const completion = await this.google.models.generateContent({
       contents: messages.map((msg) => ({

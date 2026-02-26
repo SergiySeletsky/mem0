@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Pencil, Archive, Trash, Pause, Play, ChevronDown } from "lucide-react";
+import { Pencil, Archive, Pause, Play, ChevronDown } from "lucide-react";
 import { useUI } from "@/hooks/useUI";
 import { useMemoriesApi } from "@/hooks/useMemoriesApi";
 import {
@@ -44,7 +44,7 @@ export function MemoryActions({
     }
   };
 
-  const getStateIcon = () => {
+  const _getStateIcon = () => {
     switch (memoryState) {
       case "archived":
         return <Archive className="h-3 w-3 mr-2" />;

@@ -14,10 +14,10 @@ export interface Message {
 
 export interface EmbeddingConfig {
   apiKey?: string;
-  model?: string | any;
+  model?: string;
   url?: string;
   embeddingDims?: number;
-  modelProperties?: Record<string, any>;
+  modelProperties?: Record<string, unknown>;
 }
 
 export interface VectorStoreConfig {
@@ -46,8 +46,8 @@ export interface LLMConfig {
   baseURL?: string;
   config?: Record<string, any>;
   apiKey?: string;
-  model?: string | any;
-  modelProperties?: Record<string, any>;
+  model?: string;
+  modelProperties?: Record<string, unknown>;
   /** Per-request timeout in milliseconds (default 30000) */
   timeout?: number;
   /** Number of retries on network error (default 1) */
@@ -95,7 +95,7 @@ export interface MemoryConfig {
   enableGraph?: boolean;
   reranker?: {
     provider: string;
-    config?: Record<string, any>;
+    config?: Record<string, unknown>;
   };
 }
 
@@ -106,19 +106,19 @@ export interface MemoryItem {
   createdAt?: string;
   updatedAt?: string;
   score?: number;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface SearchFilters {
   userId?: string;
   agentId?: string;
   runId?: string;
-  [key: string]: any;
+  [key: string]: string | undefined;
 }
 
 export interface SearchResult {
   results: MemoryItem[];
-  relations?: any[];
+  relations?: Array<Record<string, unknown>>;
 }
 
 export interface VectorStoreResult {

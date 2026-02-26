@@ -25,8 +25,7 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { addMemory, deleteMemory, deleteAllMemories, supersedeMemory } from "@/lib/memory/write";
-import { searchMemories, listMemories } from "@/lib/memory/search";
+import { addMemory, supersedeMemory } from "@/lib/memory/write";
 import { hybridSearch } from "@/lib/search/hybrid";
 import { runRead, runWrite } from "@/lib/db/memgraph";
 import { checkDeduplication } from "@/lib/dedup";
@@ -709,8 +708,8 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
             }, null, 2),
           }],
         };
-      } catch (e: any) {
-        return { content: [{ type: "text", text: `Error getting related memories: ${e.message}` }] };
+      } catch (e: unknown) {
+        return { content: [{ type: "text", text: `Error getting related memories: ${e instanceof Error ? e.message : String(e)}` }] };
       }
     }
   );

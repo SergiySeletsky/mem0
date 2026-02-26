@@ -1657,3 +1657,65 @@ Cover four Memgraph-related files with integration tests: `graph_stores/memgraph
 - **Windows IPv6/IPv4**: `bolt://localhost:7687` fails on Windows because `localhost` resolves to `::1` (IPv6). Always use `bolt://127.0.0.1:7687`.
 - **Dynamic imports kill coverage**: `await import("./module")` in `beforeAll` prevents Istanbul from instrumenting function bodies. Always use static `import` at module top level.
 - **Memgraph connection storms**: Running 4+ test suites in parallel overwhelms Memgraph (connection closed by server). Use `--runInBand` for integration tests.
+
+---
+
+## Session 14 — Lint Analysis & Systematic Fix
+
+### Objective
+Run ESLint and TypeScript static analysis across monorepo. Fix all identified errors and reduce warnings.
+
+### Starting State
+- **418 problems**: 124 errors + 294 warnings
+
+### Changes Made
+
+#### ESLint Config (`eslint.config.js`)
+- Added CJS override (`**/*.cjs`) with Node.js globals, `sourceType: "commonjs"` — eliminated ~96 `no-undef` false positives + ~13 `no-require-imports` errors
+- Added JS override (`**/*.js`) with Node.js globals for config files
+
+#### Unused Variables/Imports (~35 files)
+- Removed unused imports, prefixed unused params/vars with `_` across both workspaces
+- Removed unused `ToolCall` interface from `graph_memory.ts`
+- Changed `catch (_error)` → `catch` in several files
+
+#### Type Improvements (`mem0-ts/src/oss/src/types/index.ts`)
+- `model?: string | any` → `model?: string` (genuine bug fix — `string | any` collapses to `any`)
+- Several `any` → `Record<string, unknown>` improvements
+- Note: `VectorStoreResult.payload` and `LLMConfig.config` must stay `Record<string, any>` (20 cascading TS errors)
+
+#### `no-explicit-any` Reduction — openmemory/ui (~75 warnings fixed)
+- **Catch blocks** (25+): All `catch (e: any)` → `catch (e: unknown)` with `e instanceof Error ? e.message : String(e)` pattern
+- **Route row mappings** (8 routes): Added `runRead<RowType>()` generics to eliminate `(r: any)` in `.map()` callbacks and `rows[0] as any` casts:
+  - `categories/route.ts`, `apps/route.ts`, `access-log/route.ts`, `export/route.ts`, `related/route.ts`, `[memoryId]/route.ts`, `[appId]/route.ts`, config routes
+- **Neo4j Integer coercion** (4 files): `(raw as any)?.low` → `(raw as { low?: number })?.low`
+- **Config typing** (`lib/config/helpers.ts`): Expanded openmemory config type, typed `deepUpdate()` function, removed `as any` casts
+- **Store slices**: `vector: any` → `number[] | null`, `metadata_: Record<string, any>` → `Record<string, unknown>`, `apps: any[]` → `{ id: string; name: string }[]`
+- **Components**: `metadata?: Record<string, any>` → `Record<string, unknown>`, `selectedApp: any` → `RootState['apps']['selectedApp']`, typed `Memory` interface
+- **Helpers**: `_getClosestIcon(): any` → `React.ReactNode`, `Promise<any>` → `Promise<unknown>` for fetch wrappers, `useState<any[]>` → `useState<Memory[]>`
+
+#### `no-explicit-any` Reduction — mem0-ts
+- `mem0.ts`: `client: any` → `AxiosInstance`, `_validateApiKey(): any` → `void`, `args: any[]` → `unknown[]`, `options: any` → `RequestInit`, `payload: any` → `Record<string, unknown>`, 4 catch blocks fixed
+- Note: `_fetchWithErrorHandling` returns `Promise<any>` with eslint-disable (cascading issue)
+
+#### Remaining 134 warnings breakdown:
+- ~100 in mem0-ts internal files (`graph_memory.ts`, `langchain.ts`, `memgraph.ts`, `memory/index.ts`, `mem0.types.ts`) — mostly intentional for library interop and SDK flexibility
+- ~8 in embedding pipeline files with existing eslint-disable comments (HuggingFace transformers interop)
+- ~26 scattered across test mocks and edge cases
+
+### Final State
+- **0 errors** (was 124)
+- **134 warnings** (was 294)
+- **284 problems eliminated** (68% reduction)
+
+### Verification
+- TypeScript: 0 errors in both workspaces (only 2 known pre-existing `.next/types` auto-generated errors)
+- mem0-ts: 17 suites, 291 tests passing
+- openmemory/ui: 24 unit suites, 217 tests passing (10 e2e suites skipped — require Memgraph)
+
+### Patterns
+- **`runRead<T>()`**: Always add generic type parameter at call site to avoid `(r: any)` in `.map()` callbacks and `rows[0] as any` casts
+- **Catch blocks**: Always `catch (e: unknown)` with `e instanceof Error ? e.message : String(e)` narrowing
+- **Neo4j Integer**: Use `(raw as { low?: number })?.low ?? 0` instead of `(raw as any)?.low`
+- **`Record<string, any>` vs `Record<string, unknown>`**: Prefer `unknown` for internal types; keep `any` only for SDK public APIs and library interop where `unknown` causes cascading errors
+- **`string | any`**: This is a bug — collapses to `any`. Always just use `string`

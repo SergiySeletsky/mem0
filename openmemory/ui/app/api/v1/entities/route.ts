@@ -48,8 +48,8 @@ export async function GET(request: NextRequest) {
     const total = (countRows[0]?.total as number) ?? 0;
 
     return NextResponse.json({ entities: rows, total, page, size });
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("GET /entities error:", e);
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }

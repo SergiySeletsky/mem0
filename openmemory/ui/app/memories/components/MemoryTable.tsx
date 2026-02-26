@@ -88,7 +88,7 @@ export function MemoryTable() {
   const handleUpdateMemoryState = async (id: string, newState: string) => {
     try {
       await updateMemoryState([id], newState);
-    } catch (error) {
+    } catch {
       toast({
         title: "Error",
         description: "Failed to update memory state",

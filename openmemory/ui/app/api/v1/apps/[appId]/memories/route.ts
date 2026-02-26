@@ -17,7 +17,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   const skip = (page - 1) * pageSize;
 
   const userClause = userId ? `AND u.userId = $userId` : "";
-  const rows = await runRead(
+  const rows = await runRead<{ id: string; content: string; state?: string; createdAt?: string; metadata?: string; app_name?: string; categories?: string[] }>(
     `MATCH (u:User)-[:HAS_MEMORY]->(m:Memory)-[:CREATED_BY]->(a:App)
      WHERE (a.appName = $appId OR a.id = $appId)
      AND m.state = 'active' ${userClause}
@@ -36,10 +36,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
      AND m.state = 'active' RETURN count(m) AS total`,
     { appId }
   );
-  const total = (countRows[0] as any)?.total ?? 0;
+  const total = (countRows[0] as { total?: number })?.total ?? 0;
   return NextResponse.json({
     total, page, page_size: pageSize,
-    memories: rows.map((r: any) => ({
+    memories: rows.map((r) => ({
       id: r.id, content: r.content,
       created_at: r.createdAt || null,
       state: r.state || "active", app_id: null, app_name: r.app_name ?? appId,
@@ -47,8 +47,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       metadata_: r.metadata ? (typeof r.metadata === "string" ? JSON.parse(r.metadata) : r.metadata) : null,
     })),
   });
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("[apps/memories]", e);
-    return NextResponse.json({ detail: e.message }, { status: 500 });
+    return NextResponse.json({ detail: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }

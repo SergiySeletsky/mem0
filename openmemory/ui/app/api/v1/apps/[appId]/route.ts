@@ -5,7 +5,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   const { appId } = await params;
   const url = new URL(request.url);
   const userId = url.searchParams.get("user_id");
-  const rows = await runRead(
+  const rows = await runRead<{ name: string; id: string; is_active: boolean; created_at: string; memory_count: number }>(
     `MATCH (a:App) WHERE a.appName = $appId OR a.id = $appId
      OPTIONAL MATCH (:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)-[:CREATED_BY]->(a)
      WHERE m IS NULL OR m.state = 'active'
@@ -14,7 +14,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     { appId, userId: userId || "" }
   );
   if (!rows.length) return NextResponse.json({ detail: "App not found" }, { status: 404 });
-  const r = rows[0] as any;
+  const r = rows[0];
   return NextResponse.json({
     id: r.id,
     name: r.name,
