@@ -44,7 +44,7 @@ export class OllamaEmbedder implements Embedder {
       return true;
     }
     const local_models = await this.ollama.list();
-    if (!local_models.models.find((m: any) => m.name === this.model)) {
+    if (!local_models.models.find((m: { name: string }) => m.name === this.model)) {
       logger.info(`Pulling model ${this.model}...`);
       await this.ollama.pull({ model: this.model });
     }

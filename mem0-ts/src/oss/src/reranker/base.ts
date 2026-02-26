@@ -2,6 +2,10 @@
  * Base reranker interface.
  * Rerankers re-score search results based on query relevance.
  */
+
+/** A memory document record — allows any string keys for extensibility */
+export type MemoryDocument = Record<string, unknown> & { rerank_score?: number };
+
 export interface Reranker {
   /**
    * Rerank documents based on relevance to the query.
@@ -13,14 +17,14 @@ export interface Reranker {
    */
   rerank(
     query: string,
-    documents: Array<Record<string, any>>,
+    documents: MemoryDocument[],
     topK?: number,
-  ): Promise<Array<Record<string, any>>>;
+  ): Promise<MemoryDocument[]>;
 }
 
 /** Helper to extract text from a document object (tries memory → text → content) */
-export function extractDocText(doc: Record<string, any>): string {
+export function extractDocText(doc: MemoryDocument): string {
   return (
-    doc.memory ?? doc.text ?? doc.content ?? JSON.stringify(doc)
+    (doc.memory ?? doc.text ?? doc.content ?? JSON.stringify(doc)) as string
   );
 }

@@ -26,6 +26,25 @@ import {
 import { SearchFilters } from "../types";
 import { randomUUID } from "crypto";
 
+/** Raw graph node as returned by Neo4j/Memgraph driver query results */
+interface RawGraphNode {
+  id: string;
+  name: string;
+  type?: string;
+  properties?: string;
+}
+
+/** Raw graph edge as returned by Neo4j/Memgraph driver query results */
+interface RawGraphEdge {
+  id: string;
+  srcId: string;
+  srcName: string;
+  relType: string | null;
+  tgtId: string;
+  tgtName: string;
+  properties?: string;
+}
+
 interface MemgraphGraphStoreConfig {
   url?: string;
   username?: string;
@@ -386,21 +405,21 @@ export class MemgraphGraphStore implements GraphStore {
       }
 
       const rec = result.records[0];
-      const rawNodes: any[] = rec.get("neighborNodes") ?? [];
-      const rawEdges: any[] = rec.get("edgeList") ?? [];
+      const rawNodes: RawGraphNode[] = rec.get("neighborNodes") ?? [];
+      const rawEdges: RawGraphEdge[] = rec.get("edgeList") ?? [];
 
-      const nodes: GraphNode[] = rawNodes.map((n: any) => ({
+      const nodes: GraphNode[] = rawNodes.map((n: RawGraphNode) => ({
         id: n.id,
         name: n.name,
         type: n.type ?? undefined,
         properties: n.properties ? JSON.parse(n.properties) : {},
       }));
 
-      const edges: GraphEdge[] = rawEdges.map((e: any) => ({
+      const edges: GraphEdge[] = rawEdges.map((e: RawGraphEdge) => ({
         id: e.id,
         sourceId: e.srcId,
         sourceName: e.srcName,
-        relationship: e.relType,
+        relationship: e.relType ?? "",
         targetId: e.tgtId,
         targetName: e.tgtName,
         properties: e.properties ? JSON.parse(e.properties) : {},
@@ -457,10 +476,10 @@ export class MemgraphGraphStore implements GraphStore {
       }
 
       const rec = result.records[0];
-      const rawNodes: any[] = rec.get("subNodes") ?? [];
-      const rawEdges: any[] = rec.get("subEdges") ?? [];
+      const rawNodes: RawGraphNode[] = rec.get("subNodes") ?? [];
+      const rawEdges: RawGraphEdge[] = rec.get("subEdges") ?? [];
 
-      const nodes: GraphNode[] = rawNodes.map((n: any) => ({
+      const nodes: GraphNode[] = rawNodes.map((n: RawGraphNode) => ({
         id: n.id,
         name: n.name,
         type: n.type ?? undefined,
@@ -469,12 +488,12 @@ export class MemgraphGraphStore implements GraphStore {
 
       // Filter out null-relationship edges (from the OPTIONAL MATCH when a node has no outgoing)
       const edges: GraphEdge[] = rawEdges
-        .filter((e: any) => e.relType != null)
-        .map((e: any) => ({
+        .filter((e: RawGraphEdge) => e.relType != null)
+        .map((e: RawGraphEdge) => ({
           id: e.id,
           sourceId: e.srcId,
           sourceName: e.srcName,
-          relationship: e.relType,
+          relationship: e.relType as string,
           targetId: e.tgtId,
           targetName: e.tgtName,
           properties: e.properties ? JSON.parse(e.properties) : {},

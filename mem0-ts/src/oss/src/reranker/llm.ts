@@ -2,7 +2,7 @@
  * LLM-based reranker — uses any LLM to score document relevance 0.0–1.0.
  * Port of Python mem0.reranker.llm_reranker.LLMReranker.
  */
-import { Reranker, extractDocText } from "./base";
+import { Reranker, MemoryDocument, extractDocText } from "./base";
 import { LLM } from "../llms/base";
 import { LLMFactory } from "../utils/factory";
 import { LLMConfig } from "../types";
@@ -52,11 +52,11 @@ export class LLMReranker implements Reranker {
 
   async rerank(
     query: string,
-    documents: Array<Record<string, any>>,
+    documents: MemoryDocument[],
     topK?: number,
-  ): Promise<Array<Record<string, any>>> {
+  ): Promise<MemoryDocument[]> {
     const limit = topK ?? this.topK;
-    const scored: Array<Record<string, any>> = [];
+    const scored: MemoryDocument[] = [];
 
     for (const doc of documents) {
       const text = extractDocText(doc);
@@ -78,7 +78,7 @@ export class LLMReranker implements Reranker {
       scored.push({ ...doc, rerank_score: score });
     }
 
-    scored.sort((a, b) => b.rerank_score - a.rerank_score);
+    scored.sort((a, b) => (b.rerank_score ?? 0) - (a.rerank_score ?? 0));
     return limit !== undefined ? scored.slice(0, limit) : scored;
   }
 

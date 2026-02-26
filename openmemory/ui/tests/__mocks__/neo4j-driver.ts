@@ -5,6 +5,7 @@
 export default {
   driver: jest.fn(),
   auth: { basic: jest.fn() },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mock accepts any value from neo4j integer types
   integer: { toNumber: (n: any) => (typeof n === "object" ? (n.low ?? n) : n) },
   types: { Node: class {}, Relationship: class {} },
 };

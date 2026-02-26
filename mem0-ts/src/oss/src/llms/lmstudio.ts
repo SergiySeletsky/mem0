@@ -3,7 +3,7 @@
  * Port of Python mem0.llms.lmstudio.LMStudioLLM.
  */
 import OpenAI from "openai";
-import { LLM, LLMResponse } from "./base";
+import { LLM, LLMResponse, LLMTool } from "./base";
 import { LLMConfig, Message } from "../types";
 
 export class LMStudioLLM implements LLM {
@@ -25,7 +25,7 @@ export class LMStudioLLM implements LLM {
   async generateResponse(
     messages: Message[],
     responseFormat?: { type: string },
-    tools?: any[],
+    tools?: LLMTool[],
   ): Promise<string | LLMResponse> {
     // Default to json_object if no format specified (matches Python behavior)
     const format = responseFormat ?? { type: "json_object" };

@@ -1,7 +1,7 @@
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const kuzu = require("kuzu") as typeof import("kuzu");
 import path from "path";
-import { HistoryManager } from "./base";
+import { HistoryManager, HistoryRecord } from "./base";
 
 interface KuzuHistoryConfig {
   /** Path to the KuzuDB database directory. Omit (or pass ":memory:") for an
@@ -75,7 +75,7 @@ export class KuzuHistoryManager implements HistoryManager {
     });
   }
 
-  async getHistory(memoryId: string): Promise<any[]> {
+  async getHistory(memoryId: string): Promise<HistoryRecord[]> {
     await this.initialized;
     const stmt = await this.conn.prepare(
       `MATCH (h:MemoryHistory)
@@ -88,7 +88,7 @@ export class KuzuHistoryManager implements HistoryManager {
        LIMIT 100`,
     );
     const result = await this.conn.execute(stmt, { memory_id: memoryId });
-    return await result.getAll();
+    return (await result.getAll()) as unknown as HistoryRecord[];
   }
 
   async reset(): Promise<void> {

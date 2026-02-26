@@ -73,7 +73,7 @@ const telemetry = new UnifiedTelemetry(POSTHOG_API_KEY, POSTHOG_HOST);
 
 async function captureClientEvent(
   eventName: string,
-  instance: any,
+  instance: { telemetryId?: string; constructor: { name: string }; host?: string },
   additionalData: { keys?: string[]; [key: string]: unknown } = {},
 ) {
   if (!instance.telemetryId) {

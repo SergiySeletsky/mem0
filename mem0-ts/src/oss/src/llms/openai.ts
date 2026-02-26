@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { LLM, LLMResponse } from "./base";
+import { LLM, LLMResponse, LLMTool } from "./base";
 import { LLMConfig, Message } from "../types";
 
 export class OpenAILLM implements LLM {
@@ -17,7 +17,7 @@ export class OpenAILLM implements LLM {
   async generateResponse(
     messages: Message[],
     responseFormat?: { type: string },
-    tools?: any[],
+    tools?: LLMTool[],
   ): Promise<string | LLMResponse> {
     const completion = await this.openai.chat.completions.create({
       messages: messages.map((msg) => {

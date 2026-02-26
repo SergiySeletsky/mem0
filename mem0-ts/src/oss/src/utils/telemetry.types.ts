@@ -2,7 +2,7 @@ export interface TelemetryClient {
   captureEvent(
     distinctId: string,
     eventName: string,
-    properties?: Record<string, any>,
+    properties?: Record<string, unknown>,
   ): Promise<void>;
   shutdown(): Promise<void>;
 }
@@ -23,7 +23,7 @@ export interface TelemetryEventData {
   timestamp?: string;
   client_source: "browser" | "nodejs";
   client_version: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface TelemetryOptions {

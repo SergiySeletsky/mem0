@@ -3,7 +3,7 @@
  * Port of Python mem0.llms.deepseek.DeepSeekLLM.
  */
 import OpenAI from "openai";
-import { LLM, LLMResponse } from "./base";
+import { LLM, LLMResponse, LLMTool } from "./base";
 import { LLMConfig, Message } from "../types";
 
 export class DeepSeekLLM implements LLM {
@@ -28,7 +28,7 @@ export class DeepSeekLLM implements LLM {
   async generateResponse(
     messages: Message[],
     responseFormat?: { type: string },
-    tools?: any[],
+    tools?: LLMTool[],
   ): Promise<string | LLMResponse> {
     const completion = await this.client.chat.completions.create({
       model: this.model,

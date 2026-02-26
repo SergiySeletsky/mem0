@@ -45,8 +45,17 @@ import {
   GetAllMemoryOptions,
 } from "./memory.types";
 import { parse_vision_messages } from "../utils/memory";
-import { HistoryManager } from "../storage/base";
+import { HistoryManager, HistoryRecord } from "../storage/base";
 import { captureClientEvent } from "../utils/telemetry";
+
+/** Parsed LLM memory action from the update-memory prompt response */
+interface MemoryActionItem {
+  event: "ADD" | "UPDATE" | "DELETE" | "NONE";
+  id?: string;
+  text?: string;
+  old_memory?: string;
+  new_memory?: string;
+}
 
 const PROCEDURAL_MEMORY_SYSTEM_PROMPT = `You are a memory summarization system that records and preserves the complete interaction history between a human and an AI agent. You are provided with the agent's execution history over the past N steps. Your task is to produce a comprehensive summary of the agent's output history that contains every detail necessary for the agent to continue the task without ambiguity. **Every output produced by the agent must be recorded verbatim as part of the summary.**
 
@@ -121,7 +130,7 @@ export class Memory {
       const vsProvider = this.config.vectorStore.provider.toLowerCase();
       if (vsProvider === "kuzu") {
         const dbPath =
-          (this.config.vectorStore.config as any).dbPath ?? ":memory:";
+          (this.config.vectorStore.config as { dbPath?: string }).dbPath ?? ":memory:";
         this.db = HistoryManagerFactory.create("kuzu", {
           provider: "kuzu",
           config: { dbPath },
@@ -161,7 +170,7 @@ export class Memory {
         });
       } else if (gProvider === "kuzu") {
         this.graphNativeStore = new KuzuGraphStore({
-          dbPath: (this.config.graphStore.config as any).dbPath,
+          dbPath: (this.config.graphStore.config as { dbPath?: string }).dbPath,
           dimension: this.config.embedder.config.embeddingDims,
         });
       } else {
@@ -232,13 +241,13 @@ export class Memory {
    */
   private _isAgentMemory(
     messages: Message[],
-    metadata: Record<string, any>,
+    metadata: Record<string, unknown>,
   ): boolean {
     if (!metadata.agentId) return false;
     return messages.some((m) => m.role === "assistant");
   }
 
-  static fromConfig(configDict: Record<string, any>): Memory {
+  static fromConfig(configDict: Record<string, unknown>): Memory {
     try {
       const config = MemoryConfigSchema.parse(configDict);
       return new Memory(config);
@@ -329,7 +338,7 @@ export class Memory {
    */
   private async _createProceduralMemory(
     messages: Message[],
-    metadata: Record<string, any>,
+    metadata: Record<string, unknown>,
     customPrompt?: string,
   ): Promise<SearchResult> {
     const systemPrompt =
@@ -373,7 +382,7 @@ export class Memory {
 
   private async addToVectorStore(
     messages: Message[],
-    metadata: Record<string, any>,
+    metadata: Record<string, unknown>,
     filters: SearchFilters,
     infer: boolean,
   ): Promise<MemoryItem[]> {
@@ -471,7 +480,7 @@ export class Memory {
     );
 
     const cleanUpdateResponse = removeCodeBlocks(updateResponse as string);
-    let memoryActions: any[] = [];
+    let memoryActions: MemoryActionItem[] = [];
     try {
       memoryActions = JSON.parse(cleanUpdateResponse).memory || [];
     } catch (e) {
@@ -490,28 +499,28 @@ export class Memory {
         switch (action.event) {
           case "ADD": {
             const memoryId = await this.createMemory(
-              action.text,
+              action.text!,
               newMessageEmbeddings,
               metadata,
             );
             results.push({
               id: memoryId,
-              memory: action.text,
+              memory: action.text!,
               metadata: { event: action.event },
             });
             break;
           }
           case "UPDATE": {
-            const realMemoryId = tempUuidMapping[action.id];
+            const realMemoryId = tempUuidMapping[action.id!];
             await this.updateMemory(
-              realMemoryId,
-              action.text,
+              realMemoryId!,
+              action.text!,
               newMessageEmbeddings,
               metadata,
             );
             results.push({
-              id: realMemoryId,
-              memory: action.text,
+              id: realMemoryId!,
+              memory: action.text!,
               metadata: {
                 event: action.event,
                 previousMemory: action.old_memory,
@@ -520,18 +529,18 @@ export class Memory {
             break;
           }
           case "DELETE": {
-            const realMemoryId = tempUuidMapping[action.id];
-            await this.deleteMemory(realMemoryId);
+            const realMemoryId = tempUuidMapping[action.id!];
+            await this.deleteMemory(realMemoryId!);
             results.push({
-              id: realMemoryId,
-              memory: action.text,
+              id: realMemoryId!,
+              memory: action.text!,
               metadata: { event: action.event },
             });
             break;
           }
           case "NONE": {
             // Even if content doesn't change, update session IDs if provided
-            const realMemoryId = tempUuidMapping[action.id];
+            const realMemoryId = tempUuidMapping[action.id!];
             if (realMemoryId && (metadata.agentId || metadata.runId)) {
               const existingMemory = await this.vectorStore.get(realMemoryId);
               if (existingMemory) {
@@ -714,7 +723,7 @@ export class Memory {
     return { message: "Memories deleted successfully!" };
   }
 
-  async history(memoryId: string): Promise<any[]> {
+  async history(memoryId: string): Promise<HistoryRecord[]> {
     return this.db.getHistory(memoryId);
   }
 
@@ -809,7 +818,7 @@ export class Memory {
   private async createMemory(
     data: string,
     existingEmbeddings: Record<string, number[]>,
-    metadata: Record<string, any>,
+    metadata: Record<string, unknown>,
   ): Promise<string> {
     const memoryId = uuidv4();
     const embedding =
@@ -838,7 +847,7 @@ export class Memory {
     memoryId: string,
     data: string,
     existingEmbeddings: Record<string, number[]>,
-    metadata: Record<string, any> = {},
+    metadata: Record<string, unknown> = {},
   ): Promise<string> {
     const existingMemory = await this.vectorStore.get(memoryId);
     if (!existingMemory) {

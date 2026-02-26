@@ -1,3 +1,14 @@
+export interface HistoryRecord {
+  id: string;
+  memory_id: string;
+  previous_value: string | null;
+  new_value: string | null;
+  action: string;
+  created_at: string;
+  updated_at: string | null;
+  is_deleted: number;
+}
+
 export interface HistoryManager {
   addHistory(
     memoryId: string,
@@ -8,7 +19,7 @@ export interface HistoryManager {
     updatedAt?: string,
     isDeleted?: number,
   ): Promise<void>;
-  getHistory(memoryId: string): Promise<any[]>;
+  getHistory(memoryId: string): Promise<HistoryRecord[]>;
   reset(): Promise<void>;
   close(): void;
 }

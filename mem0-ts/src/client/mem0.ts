@@ -254,6 +254,7 @@ export default class MemoryClient {
 
   async update(
     memoryId: string,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- metadata accepts arbitrary user-defined values
     { text, metadata }: { text?: string; metadata?: Record<string, any> },
   ): Promise<Array<Memory>> {
     if (text === undefined && metadata === undefined) {
@@ -619,6 +620,7 @@ export default class MemoryClient {
 
   async updateProject(
     prompts: PromptUpdatePayload,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- updateProject returns open-ended project data from the API
   ): Promise<Record<string, any>> {
     if (this.telemetryId === "") await this.ping();
     this._validateOrgProject();

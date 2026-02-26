@@ -1,5 +1,5 @@
 import { Mistral } from "@mistralai/mistralai";
-import { LLM, LLMResponse } from "./base";
+import { LLM, LLMResponse, LLMTool } from "./base";
 import { LLMConfig, Message } from "../types";
 
 export class MistralLLM implements LLM {
@@ -17,7 +17,7 @@ export class MistralLLM implements LLM {
   }
 
   // Helper function to convert content to string
-  private contentToString(content: any): string {
+  private contentToString(content: string | Array<{ type: string; text?: string }> | null | undefined): string {
     if (typeof content === "string") {
       return content;
     }
@@ -39,7 +39,7 @@ export class MistralLLM implements LLM {
   async generateResponse(
     messages: Message[],
     responseFormat?: { type: string },
-    tools?: any[],
+    tools?: LLMTool[],
   ): Promise<string | LLMResponse> {
     const response = await this.client.chat.complete({
       model: this.model,
@@ -50,7 +50,7 @@ export class MistralLLM implements LLM {
             ? msg.content
             : JSON.stringify(msg.content),
       })),
-      ...(tools && { tools }),
+      ...(tools && { tools: tools as Parameters<typeof this.client.chat.complete>[0]["tools"] }),
       ...(responseFormat && { response_format: responseFormat }),
     });
 

@@ -15,8 +15,8 @@ export class LMStudioEmbedder implements Embedder {
 
   constructor(config: EmbeddingConfig) {
     const baseUrl =
-      (config as any).lmstudioBaseUrl ??
-      (config as any).baseUrl ??
+      (config as unknown as { lmstudioBaseUrl?: string; baseUrl?: string }).lmstudioBaseUrl ??
+      (config as unknown as { lmstudioBaseUrl?: string; baseUrl?: string }).baseUrl ??
       process.env.LMSTUDIO_BASE_URL ??
       "http://localhost:1234/v1";
 

@@ -6,7 +6,7 @@ import {
   BaseMessage,
 } from "@langchain/core/messages";
 import { z } from "zod";
-import { LLM, LLMResponse } from "./base";
+import { LLM, LLMResponse, LLMTool } from "./base";
 import { LLMConfig, Message } from "../types/index";
 // Import the schemas directly into LangchainLLM
 import { FactRetrievalSchema, MemoryUpdateSchema } from "../prompts";
@@ -45,34 +45,55 @@ export class LangchainLLM implements LLM {
   private llmInstance: BaseLanguageModel;
   private modelName: string;
 
+  /** Typed surface for LangChain model features not in BaseLanguageModel */
+  private get llm(): BaseLanguageModel & {
+    invoke?: unknown;
+    modelId?: string;
+    model?: string;
+    withStructuredOutput?: (schema: unknown, opts?: unknown) => unknown;
+    bindTools?: (tools: unknown[]) => unknown;
+    _identifyingParams?: { response_format?: unknown };
+    response_format?: unknown;
+  } {
+    return this.llmInstance as typeof this.llmInstance & {
+      invoke?: unknown;
+      modelId?: string;
+      model?: string;
+      withStructuredOutput?: (schema: unknown, opts?: unknown) => unknown;
+      bindTools?: (tools: unknown[]) => unknown;
+      _identifyingParams?: { response_format?: unknown };
+      response_format?: unknown;
+    };
+  }
+
   constructor(config: LLMConfig) {
     if (!config.model || typeof config.model !== "object") {
       throw new Error(
         "Langchain provider requires an initialized Langchain instance passed via the 'model' field in the LLM config.",
       );
     }
-    if (typeof (config.model as any).invoke !== "function") {
+    if (typeof (config.model as Record<string, unknown>)["invoke"] !== "function") {
       throw new Error(
         "Provided Langchain 'instance' in the 'model' field does not appear to be a valid Langchain language model (missing invoke method).",
       );
     }
     this.llmInstance = config.model as BaseLanguageModel;
     this.modelName =
-      (this.llmInstance as any).modelId ||
-      (this.llmInstance as any).model ||
+      this.llm.modelId ||
+      this.llm.model ||
       "langchain-model";
   }
 
   async generateResponse(
     messages: Message[],
     response_format?: { type: string },
-    tools?: any[],
+    tools?: LLMTool[],
   ): Promise<string | LLMResponse> {
     const langchainMessages = convertToLangchainMessages(messages);
-    let runnable: any = this.llmInstance;
-    const invokeOptions: Record<string, any> = {};
+    let runnable: { invoke: (msgs: BaseMessage[], opts?: Record<string, unknown>) => Promise<unknown>; bindTools?: (tools: unknown[]) => typeof runnable } = this.llmInstance as unknown as typeof runnable;
+    const invokeOptions: Record<string, unknown> = {};
     let isStructuredOutput = false;
-    let selectedSchema: z.ZodSchema<any> | null = null;
+    let selectedSchema: z.ZodSchema<unknown> | null = null;
     let isToolCallResponse = false;
 
     // --- Internal Schema Selection Logic (runs regardless of response_format) ---
@@ -109,7 +130,7 @@ export class LangchainLLM implements LLM {
     // --- Apply Structured Output if Schema Selected ---
     if (
       selectedSchema &&
-      typeof (this.llmInstance as any).withStructuredOutput === "function"
+      typeof this.llm.withStructuredOutput === "function"
     ) {
       // Apply if a schema was selected (for memory or single tool calls)
       if (
@@ -117,10 +138,10 @@ export class LangchainLLM implements LLM {
         (isToolCallResponse && tools && tools.length === 1)
       ) {
         try {
-          runnable = (this.llmInstance as any).withStructuredOutput(
+          runnable = this.llm.withStructuredOutput(
             selectedSchema,
             { name: tools?.[0]?.function.name },
-          );
+          ) as typeof runnable;
           isStructuredOutput = true;
         } catch {
           isStructuredOutput = false; // Ensure flag is false on error
@@ -135,16 +156,16 @@ export class LangchainLLM implements LLM {
     } else if (selectedSchema && response_format?.type === "json_object") {
       // Schema selected, but no .withStructuredOutput. Try basic response_format only if explicitly requested.
       if (
-        (this.llmInstance as any)._identifyingParams?.response_format ||
-        (this.llmInstance as any).response_format
+        this.llm._identifyingParams?.response_format ||
+        this.llm.response_format
       ) {
         invokeOptions.response_format = { type: "json_object" };
       }
     } else if (!selectedSchema && response_format?.type === "json_object") {
       // Explicit JSON request, but no schema inferred. Try basic response_format.
       if (
-        (this.llmInstance as any)._identifyingParams?.response_format ||
-        (this.llmInstance as any).response_format
+        this.llm._identifyingParams?.response_format ||
+        this.llm.response_format
       ) {
         invokeOptions.response_format = { type: "json_object" };
       }
@@ -152,9 +173,9 @@ export class LangchainLLM implements LLM {
 
     // --- Handle tool binding ---
     if (tools && tools.length > 0) {
-      if (typeof (runnable as any).bindTools === "function") {
+      if (typeof runnable.bindTools === "function") {
         try {
-          runnable = (runnable as any).bindTools(tools);
+          runnable = runnable.bindTools(tools);
         } catch {
           /* bindTools may not exist on all LangChain runnables; silently skip */
         }
@@ -162,7 +183,11 @@ export class LangchainLLM implements LLM {
     }
 
     // --- Invoke and Process Response ---
-    const response = await runnable.invoke(langchainMessages, invokeOptions);
+    type LCResponse = {
+      content?: string;
+      tool_calls?: Array<{ name?: string; args?: unknown }>;
+    };
+    const response = await runnable.invoke(langchainMessages, invokeOptions) as LCResponse;
 
       if (isStructuredOutput && !isToolCallResponse) {
         // Memory prompt with structured output
@@ -170,7 +195,7 @@ export class LangchainLLM implements LLM {
       } else if (isStructuredOutput && isToolCallResponse) {
         // Tool call with structured arguments
         if (response?.tool_calls && Array.isArray(response.tool_calls)) {
-          const mappedToolCalls = response.tool_calls.map((call: any) => ({
+          const mappedToolCalls = response.tool_calls.map((call: { name?: string; args?: unknown }) => ({
             name: call.name || tools?.[0]?.function.name || "unknown_tool",
             arguments:
               typeof call.args === "string"
@@ -201,7 +226,7 @@ export class LangchainLLM implements LLM {
         Array.isArray(response.tool_calls)
       ) {
         // Standard tool call response (no structured output used/failed)
-        const mappedToolCalls = response.tool_calls.map((call: any) => ({
+        const mappedToolCalls = response.tool_calls.map((call: { name?: string; args?: unknown }) => ({
           name: call.name || "unknown_tool",
           arguments:
             typeof call.args === "string"

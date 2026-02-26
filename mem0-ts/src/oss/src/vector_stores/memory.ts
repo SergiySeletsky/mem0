@@ -10,6 +10,7 @@ import { SearchFilters, VectorStoreConfig, VectorStoreResult } from "../types";
 interface MemoryEntry {
   id: string;
   vector: number[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- payload is an open-ended object matching VectorStoreResult.payload
   payload: Record<string, any>;
 }
 
@@ -52,6 +53,7 @@ export class MemoryVectorStore implements VectorStore {
   async insert(
     vectors: number[][],
     ids: string[],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- implements VectorStore; payload shape is provider-specific
     payloads: Record<string, any>[],
   ): Promise<void> {
     for (let i = 0; i < vectors.length; i++) {
@@ -89,6 +91,7 @@ export class MemoryVectorStore implements VectorStore {
   async update(
     vectorId: string,
     vector: number[],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- implements VectorStore; payload shape is provider-specific
     payload: Record<string, any>,
   ): Promise<void> {
     const existing = this.store.get(vectorId);

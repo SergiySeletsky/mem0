@@ -73,7 +73,7 @@ const telemetry = new UnifiedTelemetry(POSTHOG_API_KEY, POSTHOG_HOST);
 async function captureClientEvent(
   eventName: string,
   instance: TelemetryInstance,
-  additionalData: Record<string, any> = {},
+  additionalData: Record<string, unknown> = {},
 ) {
   if (!instance.telemetryId) {
     console.warn("No telemetry ID found for instance");

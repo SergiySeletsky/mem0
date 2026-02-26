@@ -7,7 +7,7 @@ export interface Entity {
 }
 
 export interface AddMemoryOptions extends Entity {
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   filters?: SearchFilters;
   infer?: boolean;
   memoryType?: string;

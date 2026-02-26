@@ -52,7 +52,7 @@ import { SearchFilters, VectorStoreConfig, VectorStoreResult } from "../types";
  * ```
  */
 
-interface KuzuVectorStoreConfig extends VectorStoreConfig {
+export interface KuzuVectorStoreConfig extends VectorStoreConfig {
   /** Path to the KuzuDB database directory.
    *  Omit or pass ":memory:" for an in-process transient store. */
   dbPath?: string;
@@ -113,6 +113,7 @@ export class KuzuVectorStore implements VectorStore {
   async insert(
     vectors: number[][],
     ids: string[],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- implements VectorStore; payload shape is provider-specific
     payloads: Record<string, any>[],
   ): Promise<void> {
     await this.initialized;
@@ -205,6 +206,7 @@ export class KuzuVectorStore implements VectorStore {
   async update(
     vectorId: string,
     vector: number[] | null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- implements VectorStore; payload shape is provider-specific
     payload: Record<string, any>,
   ): Promise<void> {
     await this.initialized;
@@ -278,6 +280,7 @@ export class KuzuVectorStore implements VectorStore {
   }
 
   private matchesFilters(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- implements VectorStore; payload shape is provider-specific
     payload: Record<string, any>,
     filters?: SearchFilters,
   ): boolean {

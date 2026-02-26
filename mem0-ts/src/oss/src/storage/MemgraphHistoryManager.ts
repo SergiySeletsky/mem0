@@ -1,5 +1,5 @@
 import neo4j, { Driver, Session } from "neo4j-driver";
-import { HistoryManager } from "./base";
+import { HistoryManager, HistoryRecord } from "./base";
 
 interface MemgraphHistoryConfig {
   url?: string;
@@ -73,7 +73,7 @@ export class MemgraphHistoryManager implements HistoryManager {
     );
   }
 
-  async getHistory(memoryId: string): Promise<any[]> {
+  async getHistory(memoryId: string): Promise<HistoryRecord[]> {
     return this.withSession(async (s) => {
       const result = await s.run(
         `MATCH (h:MemoryHistory {memory_id: $memoryId})

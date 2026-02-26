@@ -36,6 +36,7 @@ type Category = string;
 
 const defaultIcon = <CircleHelp className="w-4 h-4 mr-2" />;
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- icon map values are JSX elements with varying shapes
 const iconMap: Record<string, any> = {
   // Core themes
   health: <HeartPulse className="w-4 h-4 mr-2" />,

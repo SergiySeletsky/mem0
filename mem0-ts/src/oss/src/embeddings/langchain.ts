@@ -15,8 +15,8 @@ export class LangchainEmbedder implements Embedder {
     }
     // Basic check for embedding methods
     if (
-      typeof (config.model as any).embedQuery !== "function" ||
-      typeof (config.model as any).embedDocuments !== "function"
+      typeof (config.model as Record<string, unknown>)["embedQuery"] !== "function" ||
+      typeof (config.model as Record<string, unknown>)["embedDocuments"] !== "function"
     ) {
       throw new Error(
         "Provided Langchain 'instance' in the 'model' field does not appear to be a valid Langchain Embeddings instance (missing embedQuery or embedDocuments method).",
@@ -24,7 +24,7 @@ export class LangchainEmbedder implements Embedder {
     }
     this.embedderInstance = config.model as Embeddings;
     // Store batch size if the instance has it (optional)
-    this.batchSize = (this.embedderInstance as any).batchSize;
+    this.batchSize = (this.embedderInstance as unknown as Record<string, unknown>)["batchSize"] as number | undefined;
   }
 
   async embed(text: string, _memoryAction?: MemoryAction): Promise<number[]> {

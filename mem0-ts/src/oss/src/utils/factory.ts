@@ -6,8 +6,8 @@ import { AnthropicLLM } from "../llms/anthropic";
 import { GroqLLM } from "../llms/groq";
 import { MistralLLM } from "../llms/mistral";
 import { MemoryVectorStore } from "../vector_stores/memory";
-import { MemgraphVectorStore } from "../vector_stores/memgraph";
-import { KuzuVectorStore } from "../vector_stores/kuzu";
+import { MemgraphVectorStore, MemgraphVectorStoreConfig } from "../vector_stores/memgraph";
+import { KuzuVectorStore, KuzuVectorStoreConfig } from "../vector_stores/kuzu";
 import {
   EmbeddingConfig,
   HistoryStoreConfig,
@@ -96,7 +96,7 @@ export class LLMFactory {
 }
 
 export class RerankerFactory {
-  static create(provider: string, config: Record<string, any> = {}): Reranker {
+  static create(provider: string, config: Record<string, unknown> = {}): Reranker {
     switch (provider.toLowerCase()) {
       case "llm_reranker":
       case "llm":
@@ -115,9 +115,9 @@ export class VectorStoreFactory {
       case "memory":
         return new MemoryVectorStore(config);
       case "memgraph":
-        return new MemgraphVectorStore(config as any);
+        return new MemgraphVectorStore(config as MemgraphVectorStoreConfig);
       case "kuzu":
-        return new KuzuVectorStore(config as any);
+        return new KuzuVectorStore(config as KuzuVectorStoreConfig);
       default:
         throw new Error(`Unsupported vector store provider: ${provider}`);
     }

@@ -4,6 +4,7 @@ export interface VectorStore {
   insert(
     vectors: number[][],
     ids: string[],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- payload shape is open-ended per provider
     payloads: Record<string, any>[],
   ): Promise<void>;
   search(
@@ -15,6 +16,7 @@ export interface VectorStore {
   update(
     vectorId: string,
     vector: number[] | null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- payload shape is open-ended per provider
     payload: Record<string, any>,
   ): Promise<void>;
   delete(vectorId: string): Promise<void>;

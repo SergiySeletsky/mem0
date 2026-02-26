@@ -1,15 +1,8 @@
 import { v4 as uuidv4 } from "uuid";
-import { HistoryManager } from "./base";
-interface HistoryEntry {
-  id: string;
-  memory_id: string;
-  previous_value: string | null;
-  new_value: string | null;
-  action: string;
-  created_at: string;
-  updated_at: string | null;
-  is_deleted: number;
-}
+import { HistoryManager, HistoryRecord } from "./base";
+
+// HistoryEntry is a local alias for the shared HistoryRecord type
+type HistoryEntry = HistoryRecord;
 
 export class MemoryHistoryManager implements HistoryManager {
   private memoryStore: Map<string, HistoryEntry> = new Map();
@@ -37,7 +30,7 @@ export class MemoryHistoryManager implements HistoryManager {
     this.memoryStore.set(historyEntry.id, historyEntry);
   }
 
-  async getHistory(memoryId: string): Promise<any[]> {
+  async getHistory(memoryId: string): Promise<HistoryRecord[]> {
     return Array.from(this.memoryStore.values())
       .filter((entry) => entry.memory_id === memoryId)
       .sort(

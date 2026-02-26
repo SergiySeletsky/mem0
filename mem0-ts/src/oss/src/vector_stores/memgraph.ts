@@ -2,7 +2,7 @@ import neo4j, { Driver, Session } from "neo4j-driver";
 import { VectorStore } from "./base";
 import { SearchFilters, VectorStoreConfig, VectorStoreResult } from "../types";
 
-interface MemgraphVectorStoreConfig extends VectorStoreConfig {
+export interface MemgraphVectorStoreConfig extends VectorStoreConfig {
   url?: string;
   username?: string;
   password?: string;
@@ -63,6 +63,7 @@ export class MemgraphVectorStore implements VectorStore {
   async insert(
     vectors: number[][],
     ids: string[],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- implements VectorStore; payload shape is provider-specific
     payloads: Record<string, any>[],
   ): Promise<void> {
     await this.initialized;
@@ -140,6 +141,7 @@ export class MemgraphVectorStore implements VectorStore {
   async update(
     vectorId: string,
     vector: number[] | null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- implements VectorStore; payload shape is provider-specific
     payload: Record<string, any>,
   ): Promise<void> {
     await this.initialized;
@@ -216,6 +218,7 @@ export class MemgraphVectorStore implements VectorStore {
     await this.deleteCol();
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- implements VectorStore; payload shape is provider-specific
   private matchesFilters(payload: Record<string, any>, filters?: SearchFilters): boolean {
     if (!filters) return true;
     return Object.entries(filters).every(([k, v]) => payload[k] === v);

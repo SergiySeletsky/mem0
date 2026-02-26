@@ -1,5 +1,5 @@
 import { Ollama } from "ollama";
-import { LLM, LLMResponse } from "./base";
+import { LLM, LLMResponse, LLMTool } from "./base";
 import { LLMConfig, Message } from "../types";
 import { logger } from "../utils/logger";
 
@@ -11,7 +11,7 @@ export class OllamaLLM implements LLM {
 
   constructor(config: LLMConfig) {
     this.ollama = new Ollama({
-      host: config.config?.url || "http://localhost:11434",
+      host: (config.config?.url as string | undefined) || "http://localhost:11434",
     });
     this.model = config.model || "llama3.1:8b";
     this.ensureModelExists().catch((err) => {
@@ -22,7 +22,7 @@ export class OllamaLLM implements LLM {
   async generateResponse(
     messages: Message[],
     responseFormat?: { type: string },
-    tools?: any[],
+    tools?: LLMTool[],
   ): Promise<string | LLMResponse> {
     try {
       await this.ensureModelExists();
@@ -94,7 +94,7 @@ export class OllamaLLM implements LLM {
       return true;
     }
     const local_models = await this.ollama.list();
-    if (!local_models.models.find((m: any) => m.name === this.model)) {
+    if (!local_models.models.find((m: { name: string }) => m.name === this.model)) {
       logger.info(`Pulling model ${this.model}...`);
       await this.ollama.pull({ model: this.model });
     }

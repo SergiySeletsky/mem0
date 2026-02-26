@@ -10,7 +10,9 @@ export interface MemoryOptions {
   agent_id?: string;
   app_id?: string;
   run_id?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- user-facing metadata accepts arbitrary values
   metadata?: Record<string, any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- user-facing filters accept arbitrary values
   filters?: Record<string, any>;
   org_name?: string | null; // Deprecated
   project_name?: string | null; // Deprecated
@@ -31,6 +33,7 @@ export interface MemoryOptions {
   async_mode?: boolean;
   filter_memories?: boolean;
   immutable?: boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- structured data schema is user-defined, open-ended
   structured_data_schema?: Record<string, any>;
 }
 
@@ -118,6 +121,7 @@ export interface Memory {
   updated_at?: Date;
   memory_type?: string;
   score?: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- metadata from API is an open-ended object
   metadata?: any | null;
   owner?: string | null;
   agent_id?: string | null;
@@ -143,23 +147,28 @@ export interface User {
 export interface AllUsers {
   count: number;
   results: Array<User>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pagination cursor is an opaque value from the API
   next: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pagination cursor is an opaque value from the API
   previous: any;
 }
 
 export interface ProjectResponse {
   custom_instructions?: string;
   custom_categories?: string[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- open-ended project response from API
   [key: string]: any;
 }
 
 interface custom_categories {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- user-defined category keys
   [key: string]: any;
 }
 
 export interface PromptUpdatePayload {
   custom_instructions?: string;
   custom_categories?: custom_categories[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- open-ended prompt update payload
   [key: string]: any;
 }
 
@@ -195,12 +204,15 @@ export interface FeedbackPayload {
 }
 
 export interface CreateMemoryExportPayload extends Common {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- export schema is user-defined
   schema: Record<string, any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- export filters are user-defined
   filters: Record<string, any>;
   export_instructions?: string;
 }
 
 export interface GetMemoryExportPayload extends Common {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- export filters are user-defined
   filters?: Record<string, any>;
   memory_export_id?: string;
 }

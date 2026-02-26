@@ -23,8 +23,11 @@ export interface EmbeddingConfig {
 export interface VectorStoreConfig {
   collectionName?: string;
   dimension?: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- arbitrary provider-specific client instance
   client?: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- arbitrary provider-specific instance
   instance?: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- index signature required for pass-through of provider-specific options
   [key: string]: any;
 }
 
@@ -44,7 +47,7 @@ export interface HistoryStoreConfig {
 export interface LLMConfig {
   provider?: string;
   baseURL?: string;
-  config?: Record<string, any>;
+  config?: Record<string, unknown>;
   apiKey?: string;
   model?: string;
   modelProperties?: Record<string, unknown>;
@@ -118,11 +121,13 @@ export interface SearchFilters {
 
 export interface SearchResult {
   results: MemoryItem[];
-  relations?: Array<Record<string, unknown>>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- relations come from graph store with varying shapes
+  relations?: Array<Record<string, any>>;
 }
 
 export interface VectorStoreResult {
   id: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- payload is an open-ended object from the vector DB
   payload: Record<string, any>;
   score?: number;
 }

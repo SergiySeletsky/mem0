@@ -5,7 +5,7 @@
  * Requires: npm install cohere-ai
  * The `cohere-ai` package is lazy-imported so it's only needed if this provider is used.
  */
-import { Reranker, extractDocText } from "./base";
+import { Reranker, MemoryDocument, extractDocText } from "./base";
 
 export interface CohereRerankerConfig {
   /** Cohere API key (falls back to COHERE_API_KEY env) */
@@ -20,8 +20,20 @@ export interface CohereRerankerConfig {
   maxChunksPerDoc?: number;
 }
 
+/** Minimal typed surface of the Cohere client we actually use */
+type CohereClientShape = {
+  rerank(args: {
+    model: string;
+    query: string;
+    documents: string[];
+    topN: number;
+    returnDocuments: boolean;
+    maxChunksPerDoc?: number;
+  }): Promise<{ results: Array<{ index: number; relevanceScore: number }> }>;
+};
+
 export class CohereReranker implements Reranker {
-  private client: any;
+  private client: CohereClientShape;
   private model: string;
   private defaultTopK: number | undefined;
   private returnDocuments: boolean;
@@ -52,9 +64,9 @@ export class CohereReranker implements Reranker {
 
   async rerank(
     query: string,
-    documents: Array<Record<string, any>>,
+    documents: MemoryDocument[],
     topK?: number,
-  ): Promise<Array<Record<string, any>>> {
+  ): Promise<MemoryDocument[]> {
     const limit = topK ?? this.defaultTopK ?? documents.length;
     const texts = documents.map(extractDocText);
 
@@ -70,7 +82,7 @@ export class CohereReranker implements Reranker {
         }),
       });
 
-      const results: Array<Record<string, any>> = [];
+      const results: MemoryDocument[] = [];
       for (const result of response.results) {
         results.push({
           ...documents[result.index],

@@ -12,7 +12,7 @@ export class ConfigManager {
         config: (() => {
           const defaultConf = DEFAULT_MEMORY_CONFIG.embedder.config;
           const userConf = userConfig.embedder?.config;
-          let finalModel: string | any = defaultConf.model;
+          let finalModel: string | object | undefined = defaultConf.model;
 
           if (userConf?.model && typeof userConf.model === "object") {
             finalModel = userConf.model;
@@ -72,7 +72,7 @@ export class ConfigManager {
         config: (() => {
           const defaultConf = DEFAULT_MEMORY_CONFIG.llm.config;
           const userConf = userConfig.llm?.config;
-          let finalModel: string | any = defaultConf.model;
+          let finalModel: string | object | undefined = defaultConf.model;
 
           if (userConf?.model && typeof userConf.model === "object") {
             finalModel = userConf.model;

@@ -1,3 +1,5 @@
+import { HistoryRecord } from "./base";
+
 export class DummyHistoryManager {
   constructor() {}
 
@@ -13,7 +15,7 @@ export class DummyHistoryManager {
     return;
   }
 
-  async getHistory(_memoryId: string): Promise<any[]> {
+  async getHistory(_memoryId: string): Promise<HistoryRecord[]> {
     return [];
   }
 

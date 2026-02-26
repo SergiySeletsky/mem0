@@ -3,7 +3,7 @@ import { BM25 } from "../utils/bm25";
 import { MemoryConfig } from "../types";
 import { EmbedderFactory, LLMFactory } from "../utils/factory";
 import { Embedder } from "../embeddings/base";
-import { LLM } from "../llms/base";
+import { LLM, LLMTool } from "../llms/base";
 import {
   DELETE_MEMORY_TOOL_GRAPH,
   EXTRACT_ENTITIES_TOOL,
@@ -22,20 +22,26 @@ interface SearchOutput {
   similarity: number;
 }
 
-interface Tool {
-  type: string;
-  function: {
-    name: string;
-    description: string;
-    parameters: Record<string, any>;
-  };
+interface GraphMemoryResult {
+  deleted_entities: unknown[][];
+  added_entities: unknown[][];
+  relations?: GraphRelation[];
 }
 
-interface GraphMemoryResult {
-  deleted_entities: any[];
-  added_entities: any[];
-  relations?: any[];
+/** A graph entity relation extracted from LLM responses */
+interface GraphRelation {
+  source: string;
+  relationship: string;
+  destination: string;
+  source_type?: string;
+  destination_type?: string;
 }
+
+/** A graph entity to be deleted from the graph */
+type GraphEntity = GraphRelation;
+
+/** Cypher query parameters — arbitrary key-value pairs for Neo4j */
+type CypherParams = Record<string, unknown>;
 
 export class MemoryGraph {
   private config: MemoryConfig;
@@ -87,7 +93,7 @@ export class MemoryGraph {
 
   async add(
     data: string,
-    filters: Record<string, any>,
+    filters: Record<string, unknown>,
   ): Promise<GraphMemoryResult> {
     const entityTypeMap = await this._retrieveNodesFromData(data, filters);
 
@@ -110,12 +116,12 @@ export class MemoryGraph {
 
     const deletedEntities = await this._deleteEntities(
       toBeDeleted,
-      filters["userId"],
+      filters["userId"] as string,
     );
 
     const addedEntities = await this._addEntities(
       toBeAdded,
-      filters["userId"],
+      filters["userId"] as string,
       entityTypeMap,
     );
 
@@ -126,7 +132,7 @@ export class MemoryGraph {
     };
   }
 
-  async search(query: string, filters: Record<string, any>, _limit = 100) {
+  async search(query: string, filters: Record<string, unknown>, _limit = 100) {
     const entityTypeMap = await this._retrieveNodesFromData(query, filters);
     const searchOutput = await this._searchGraphDb(
       Object.keys(entityTypeMap),
@@ -157,7 +163,7 @@ export class MemoryGraph {
     return searchResults;
   }
 
-  async deleteAll(filters: Record<string, any>) {
+  async deleteAll(filters: Record<string, unknown>) {
     const session = this.graph.session();
     try {
       await session.run("MATCH (n {user_id: $user_id}) DETACH DELETE n", {
@@ -168,7 +174,7 @@ export class MemoryGraph {
     }
   }
 
-  async getAll(filters: Record<string, any>, limit = 100) {
+  async getAll(filters: Record<string, unknown>, limit = 100) {
     const session = this.graph.session();
     try {
       const result = await session.run(
@@ -195,9 +201,9 @@ export class MemoryGraph {
 
   private async _retrieveNodesFromData(
     data: string,
-    filters: Record<string, any>,
+    filters: Record<string, unknown>,
   ) {
-    const tools = [EXTRACT_ENTITIES_TOOL] as Tool[];
+    const tools = [EXTRACT_ENTITIES_TOOL] as LLMTool[];
     const searchResults = await this.structuredLlm.generateResponse(
       [
         {
@@ -239,7 +245,7 @@ export class MemoryGraph {
 
   private async _establishNodesRelationsFromData(
     data: string,
-    filters: Record<string, any>,
+    filters: Record<string, unknown>,
     entityTypeMap: Record<string, string>,
   ) {
     let messages;
@@ -250,7 +256,7 @@ export class MemoryGraph {
           content:
             EXTRACT_RELATIONS_PROMPT.replace(
               "USER_ID",
-              filters["userId"],
+              filters["userId"] as string,
             ).replace(
               "CUSTOM_PROMPT",
               `4. ${this.config.graphStore.customPrompt}`,
@@ -263,7 +269,7 @@ export class MemoryGraph {
         {
           role: "system",
           content:
-            EXTRACT_RELATIONS_PROMPT.replace("USER_ID", filters["userId"]) +
+            EXTRACT_RELATIONS_PROMPT.replace("USER_ID", filters["userId"] as string) +
             "\nPlease provide your response in JSON format.",
         },
         {
@@ -273,14 +279,14 @@ export class MemoryGraph {
       ];
     }
 
-    const tools = [RELATIONS_TOOL] as Tool[];
+    const tools = [RELATIONS_TOOL] as LLMTool[];
     const extractedEntities = await this.structuredLlm.generateResponse(
       messages,
       { type: "json_object" },
       tools,
     );
 
-    let entities: any[] = [];
+    let entities: GraphRelation[] = [];
     if (typeof extractedEntities !== "string" && extractedEntities.toolCalls) {
       const toolCall = extractedEntities.toolCalls[0];
       if (toolCall && toolCall.arguments) {
@@ -296,7 +302,7 @@ export class MemoryGraph {
 
   private async _searchGraphDb(
     nodeList: string[],
-    filters: Record<string, any>,
+    filters: Record<string, unknown>,
     limit = 100,
   ): Promise<SearchOutput[]> {
     const resultRelations: SearchOutput[] = [];
@@ -359,7 +365,7 @@ export class MemoryGraph {
   private async _getDeleteEntitiesFromSearchOutput(
     searchOutput: SearchOutput[],
     data: string,
-    filters: Record<string, any>,
+    filters: Record<string, unknown>,
   ) {
     const searchOutputString = searchOutput
       .map(
@@ -371,10 +377,10 @@ export class MemoryGraph {
     const [systemPrompt, userPrompt] = getDeleteMessages(
       searchOutputString,
       data,
-      filters["userId"],
+      filters["userId"] as string,
     );
 
-    const tools = [DELETE_MEMORY_TOOL_GRAPH] as Tool[];
+    const tools = [DELETE_MEMORY_TOOL_GRAPH] as LLMTool[];
     const memoryUpdates = await this.structuredLlm.generateResponse(
       [
         { role: "system", content: systemPrompt },
@@ -384,7 +390,7 @@ export class MemoryGraph {
       tools,
     );
 
-    const toBeDeleted: any[] = [];
+    const toBeDeleted: GraphEntity[] = [];
     if (typeof memoryUpdates !== "string" && memoryUpdates.toolCalls) {
       for (const item of memoryUpdates.toolCalls) {
         if (item.name === "delete_graph_memory") {
@@ -400,8 +406,8 @@ export class MemoryGraph {
     return cleanedToBeDeleted;
   }
 
-  private async _deleteEntities(toBeDeleted: any[], userId: string) {
-    const results: any[] = [];
+  private async _deleteEntities(toBeDeleted: GraphEntity[], userId: string) {
+    const results: unknown[][] = [];
     const session = this.graph.session();
 
     try {
@@ -435,11 +441,11 @@ export class MemoryGraph {
   }
 
   private async _addEntities(
-    toBeAdded: any[],
+    toBeAdded: GraphRelation[],
     userId: string,
     entityTypeMap: Record<string, string>,
   ) {
-    const results: any[] = [];
+    const results: unknown[][] = [];
     const session = this.graph.session();
 
     try {
@@ -461,7 +467,7 @@ export class MemoryGraph {
         );
 
         let cypher: string;
-        let params: Record<string, any>;
+        let params: CypherParams;
 
         if (
           destinationNodeSearchResult.length === 0 &&
@@ -562,7 +568,7 @@ export class MemoryGraph {
     return results;
   }
 
-  private _removeSpacesFromEntities(entityList: any[]) {
+  private _removeSpacesFromEntities(entityList: GraphRelation[]) {
     return entityList.map((item) => ({
       ...item,
       source: item.source.toLowerCase().replace(/ /g, "_"),
