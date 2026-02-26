@@ -38,7 +38,7 @@ beforeAll(async () => {
   try {
     const neo4j = require("neo4j-driver");
     const driver = neo4j.driver(
-      process.env.MEMGRAPH_URL || "bolt://localhost:7687",
+      process.env.MEMGRAPH_URL || "bolt://127.0.0.1:7687",
       neo4j.auth.basic(
         process.env.MEMGRAPH_USER || "memgraph",
         process.env.MEMGRAPH_PASSWORD || "memgraph",
@@ -153,13 +153,13 @@ function mockLLMForDedup(
 // ── Memgraph config ─────────────────────────────────────────────────────────
 
 const MEMGRAPH_CONFIG = {
-  url: process.env.MEMGRAPH_URL || "bolt://localhost:7687",
+  url: process.env.MEMGRAPH_URL || "bolt://127.0.0.1:7687",
   username: process.env.MEMGRAPH_USER || "memgraph",
   password: process.env.MEMGRAPH_PASSWORD || "memgraph",
 };
 
-// Use a unique index name per test run to avoid cross-run interference
-const indexName = `integ_mg_${Date.now()}`;
+// Use a fixed index name to avoid per-run label+property conflicts
+const indexName = "integ_mem0_vector";
 
 function createMemgraphMemory(): Memory {
   return new Memory({
@@ -204,6 +204,33 @@ describe("Memgraph Integration — full Memory pipeline", () => {
   beforeAll(async () => {
     if (!memgraphAvailable) return;
     mockEmbedding();
+
+    // Clean up stale MemVector vector indexes from previous runs to avoid
+    // "index already exists" conflicts (Memgraph: one index per label+property)
+    const neo4j = require("neo4j-driver");
+    const tmpDriver = neo4j.driver(
+      MEMGRAPH_CONFIG.url,
+      neo4j.auth.basic(MEMGRAPH_CONFIG.username, MEMGRAPH_CONFIG.password),
+    );
+    const tmpSession = tmpDriver.session();
+    try {
+      const result = await tmpSession.run(
+        `CALL vector_search.show_index_info() YIELD index_name, label, property RETURN index_name, label, property`,
+      );
+      for (const rec of result.records) {
+        const name = rec.get("index_name") as string;
+        const label = rec.get("label") as string;
+        const prop = rec.get("property") as string;
+        if (label === "MemVector" && prop === "embedding" && name !== indexName) {
+          await tmpSession.run(`DROP VECTOR INDEX ${name}`).catch(() => {});
+        }
+      }
+    } catch {
+      // vector_search might not be available
+    } finally {
+      await tmpSession.close();
+      await tmpDriver.close();
+    }
 
     // Create ONE Memory instance — reusing the same Memgraph connection.
     memory = createMemgraphMemory();

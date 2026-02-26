@@ -12,9 +12,10 @@
  */
 
 import neo4j from "neo4j-driver";
+import { MemgraphGraphStore } from "../src/graph_stores/memgraph";
 
 const DIM = 16;
-const MEMGRAPH_URL = process.env.MEMGRAPH_URL ?? "bolt://localhost:7687";
+const MEMGRAPH_URL = process.env.MEMGRAPH_URL ?? "bolt://127.0.0.1:7687";
 const MEMGRAPH_USER = process.env.MEMGRAPH_USER ?? "memgraph";
 const MEMGRAPH_PASSWORD = process.env.MEMGRAPH_PASSWORD ?? "memgraph";
 
@@ -48,14 +49,9 @@ async function isMemgraphAvailable(): Promise<boolean> {
 }
 
 let memgraphAvailable = false;
-let MemgraphGraphStore: typeof import("../src/graph_stores/memgraph").MemgraphGraphStore;
 
 beforeAll(async () => {
   memgraphAvailable = await isMemgraphAvailable();
-  if (memgraphAvailable) {
-    const mod = await import("../src/graph_stores/memgraph");
-    MemgraphGraphStore = mod.MemgraphGraphStore;
-  }
 });
 
 const describeIfMemgraph = (): jest.Describe =>
@@ -73,12 +69,39 @@ describe("MemgraphGraphStore", () => {
 
   beforeAll(async () => {
     if (!memgraphAvailable) return;
+
+    // Clean up any stale Entity embedding vector indexes from previous runs
+    // (Memgraph only allows one vector index per label+property combo)
+    const tmpDriver = neo4j.driver(
+      MEMGRAPH_URL,
+      neo4j.auth.basic(MEMGRAPH_USER, MEMGRAPH_PASSWORD),
+    );
+    const tmpSession = tmpDriver.session();
+    try {
+      const result = await tmpSession.run(
+        `CALL vector_search.show_index_info() YIELD index_name, label, property RETURN index_name, label, property`,
+      );
+      for (const rec of result.records) {
+        const name = rec.get("index_name") as string;
+        const label = rec.get("label") as string;
+        const prop = rec.get("property") as string;
+        if (label === "Entity" && prop === "embedding" && name !== "entity_integ_test") {
+          await tmpSession.run(`DROP VECTOR INDEX ${name}`).catch(() => {});
+        }
+      }
+    } catch {
+      // vector_search might not be available
+    } finally {
+      await tmpSession.close();
+      await tmpDriver.close();
+    }
+
     store = new MemgraphGraphStore({
       url: MEMGRAPH_URL,
       username: MEMGRAPH_USER,
       password: MEMGRAPH_PASSWORD,
       dimension: DIM,
-      indexName: `entity_test_${Date.now()}`,
+      indexName: "entity_integ_test",
     });
     await store.initialize();
   });

@@ -188,4 +188,162 @@ describe("SPEC 00: Memgraph layer contract", () => {
     expect(query).toContain("[:HAS_MEMORY]");
     expect(query).toContain("m.invalidAt IS NULL");
   });
+
+  // ---- closeDriver ----
+  test("MG_10: closeDriver() calls driver.close() and clears the singleton", async () => {
+    const { getDriver, closeDriver } = require("@/lib/db/memgraph");
+
+    // Create the singleton
+    getDriver();
+    expect(mockDriver.close).not.toHaveBeenCalled();
+
+    await closeDriver();
+    expect(mockDriver.close).toHaveBeenCalledTimes(1);
+
+    // After close, getDriver() should create a new instance
+    const neo4j = require("neo4j-driver").default;
+    const callsBefore = neo4j.driver.mock.calls.length;
+    getDriver();
+    expect(neo4j.driver.mock.calls.length).toBe(callsBefore + 1);
+  });
+
+  test("MG_11: closeDriver() is a no-op if driver was never created", async () => {
+    const { closeDriver } = require("@/lib/db/memgraph");
+    // Should not throw even though _driver is null
+    await expect(closeDriver()).resolves.not.toThrow();
+    expect(mockDriver.close).not.toHaveBeenCalled();
+  });
+
+  // ---- initSchema error handling ----
+  test('MG_12: initSchema() ignores errors containing "violates"', async () => {
+    mockSession.run
+      .mockResolvedValueOnce({ records: [], summary: {} })
+      .mockRejectedValueOnce(new Error("Existing data violates it"))
+      .mockResolvedValue({ records: [], summary: {} });
+
+    const { initSchema } = require("@/lib/db/memgraph");
+    await expect(initSchema()).resolves.not.toThrow();
+  });
+
+  test('MG_13: initSchema() ignores errors containing "experimental"', async () => {
+    mockSession.run
+      .mockResolvedValueOnce({ records: [], summary: {} })
+      .mockRejectedValueOnce(new Error("Feature requires experimental flag"))
+      .mockResolvedValue({ records: [], summary: {} });
+
+    const { initSchema } = require("@/lib/db/memgraph");
+    await expect(initSchema()).resolves.not.toThrow();
+  });
+
+  test("MG_14: initSchema() rethrows non-ignorable errors", async () => {
+    mockSession.run.mockRejectedValueOnce(new Error("Out of memory"));
+
+    const { initSchema } = require("@/lib/db/memgraph");
+    await expect(initSchema()).rejects.toThrow("Out of memory");
+  });
+
+  // ---- ensureVectorIndexes ----
+  test("MG_15: ensureVectorIndexes() is a no-op when both indexes exist", async () => {
+    mockSession.run.mockResolvedValueOnce({
+      records: [
+        makeRecord({ index_name: "memory_vectors" }),
+        makeRecord({ index_name: "entity_vectors" }),
+      ],
+      summary: {},
+    });
+
+    const { ensureVectorIndexes } = require("@/lib/db/memgraph");
+    await ensureVectorIndexes();
+
+    // Only the show_index_info call, no CREATE calls
+    const allCalls: string[] = mockSession.run.mock.calls.map((c: any[]) => c[0] as string);
+    expect(allCalls.some((q: string) => q.includes("vector_search.show_index_info"))).toBe(true);
+    expect(allCalls.some((q: string) => q.includes("CREATE VECTOR INDEX"))).toBe(false);
+  });
+
+  test("MG_16: ensureVectorIndexes() re-creates memory_vectors when missing", async () => {
+    // show_index_info returns only entity_vectors
+    mockSession.run
+      .mockResolvedValueOnce({
+        records: [makeRecord({ index_name: "entity_vectors" })],
+        summary: {},
+      })
+      // CREATE VECTOR INDEX memory_vectors
+      .mockResolvedValueOnce({ records: [], summary: {} });
+
+    const { ensureVectorIndexes } = require("@/lib/db/memgraph");
+    await ensureVectorIndexes();
+
+    const allCalls: string[] = mockSession.run.mock.calls.map((c: any[]) => c[0] as string);
+    const createCall = allCalls.find((q: string) => q.includes("CREATE VECTOR INDEX") && q.includes("memory_vectors"));
+    expect(createCall).toBeDefined();
+  });
+
+  test("MG_17: ensureVectorIndexes() re-creates entity_vectors when missing", async () => {
+    // show_index_info returns only memory_vectors
+    mockSession.run
+      .mockResolvedValueOnce({
+        records: [makeRecord({ index_name: "memory_vectors" })],
+        summary: {},
+      })
+      // CREATE VECTOR INDEX entity_vectors
+      .mockResolvedValueOnce({ records: [], summary: {} });
+
+    const { ensureVectorIndexes } = require("@/lib/db/memgraph");
+    await ensureVectorIndexes();
+
+    const allCalls: string[] = mockSession.run.mock.calls.map((c: any[]) => c[0] as string);
+    const createCall = allCalls.find((q: string) => q.includes("CREATE VECTOR INDEX") && q.includes("entity_vectors"));
+    expect(createCall).toBeDefined();
+  });
+
+  test("MG_18: ensureVectorIndexes() re-creates both indexes when none exist", async () => {
+    // show_index_info returns empty
+    mockSession.run
+      .mockResolvedValueOnce({ records: [], summary: {} })
+      // CREATE memory_vectors
+      .mockResolvedValueOnce({ records: [], summary: {} })
+      // CREATE entity_vectors
+      .mockResolvedValueOnce({ records: [], summary: {} });
+
+    const { ensureVectorIndexes } = require("@/lib/db/memgraph");
+    await ensureVectorIndexes();
+
+    const allCalls: string[] = mockSession.run.mock.calls.map((c: any[]) => c[0] as string);
+    expect(allCalls.filter((q: string) => q.includes("CREATE VECTOR INDEX")).length).toBe(2);
+  });
+
+  test("MG_19: ensureVectorIndexes() skips DB call on second invocation (cached)", async () => {
+    // First call: indexes exist
+    mockSession.run.mockResolvedValueOnce({
+      records: [
+        makeRecord({ index_name: "memory_vectors" }),
+        makeRecord({ index_name: "entity_vectors" }),
+      ],
+      summary: {},
+    });
+
+    const { ensureVectorIndexes } = require("@/lib/db/memgraph");
+    await ensureVectorIndexes();
+    const callsAfterFirst = mockSession.run.mock.calls.length;
+
+    // Second call should be a no-op (cached flag)
+    await ensureVectorIndexes();
+    expect(mockSession.run.mock.calls.length).toBe(callsAfterFirst);
+  });
+
+  test("MG_20: ensureVectorIndexes() logs warning and does not throw on failure", async () => {
+    mockSession.run.mockRejectedValueOnce(new Error("query modules not loaded"));
+
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { ensureVectorIndexes } = require("@/lib/db/memgraph");
+    await expect(ensureVectorIndexes()).resolves.not.toThrow();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[ensureVectorIndexes]"),
+      expect.stringContaining("query modules not loaded"),
+    );
+    warnSpy.mockRestore();
+  });
 });

@@ -103,10 +103,11 @@ export class MemgraphVectorStore implements VectorStore {
     const uid = this.userId;
     return this.withSession(async (s) => {
       // CALL vector_search.search() returns top-k by cosine similarity.
-      // The WHERE clause after YIELD is standard Cypher supported by Memgraph
-      // and pre-filters by user_id before results reach JS.
+      // Use WITH after YIELD so the WHERE clause is valid Memgraph Cypher.
+      // Pre-filters by user_id before results reach JS.
       const result = await s.run(
         `CALL vector_search.search($idx, $k, $query) YIELD node, similarity
+         WITH node, similarity
          WHERE $uid = '' OR node.user_id = $uid
          RETURN node.id AS id, node.payload AS payload, similarity AS score`,
         { idx: this.indexName, k: neo4j.int(limit * 4), query, uid },

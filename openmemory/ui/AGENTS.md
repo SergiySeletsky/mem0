@@ -1610,3 +1610,50 @@ All 11 suites passed:
 - **`jest.e2e.config.ts` type import:** Use `import type { JestConfigWithTsJest as Config } from "ts-jest"` NOT `import type { Config } from "jest"` — the latter is a module export not available in `@types/jest@29`.
 - **Memgraph WAL corruption:** If Memgraph container exits 139 (SIGSEGV) in a crash loop, wipe the data volume: `docker rm -f memgraph && docker volume rm openmemory_memgraph_data`. Do NOT just restart — it will loop indefinitely.
 - **e2e pre-flight checklist:** Before running `pnpm test:e2e`: (1) verify `docker ps` shows memgraph UP; (2) TCP test bolt port 7687; (3) confirm dev server on :3000.
+
+---
+
+## Session — Memgraph Integration Test Coverage
+
+### Objective
+Cover four Memgraph-related files with integration tests: `graph_stores/memgraph.ts`, `vector_stores/memgraph.ts`, `MemgraphHistoryManager.ts` (all in mem0-ts), and `openmemory/ui/lib/db/memgraph.ts`.
+
+### Changes Made
+
+#### Source code bug fixes (mem0-ts)
+- **`vector_stores/memgraph.ts`**: Fixed `WHERE` after `YIELD` in `search()` — Memgraph requires `WITH` clause between `YIELD` and `WHERE`. Added `WITH node, similarity` before the WHERE filter.
+- **`graph_stores/memgraph.ts`**: Same Cypher fix in `searchNodes()` and `searchEdges()`. Also added second `WITH` before `ORDER BY` in `searchEdges()` (Memgraph requires `WITH` before `ORDER BY` after `WHERE`).
+
+#### New integration test files (mem0-ts)
+- **`vector_store_memgraph_integration.test.ts`** (17 tests): healthCheck, userId management, insert/get, batch insert, HNSW search (with userId filter, minScore, payload filters), update (with/without embedding), delete, list, deleteCol, reset. Static import for coverage.
+- **`memgraph_history_integration.test.ts`** (9 tests): addHistory (create, update, delete actions), getHistory (ordered, empty, unique IDs), reset, close, init idempotency. Static import for coverage.
+
+#### Fixes to existing tests (mem0-ts)
+- **`graph_store_memgraph.test.ts`**: Changed dynamic `await import()` to static `import` for coverage instrumentation. Fixed stale vector index cleanup in `beforeAll`. Switched to stable index name `entity_integ_test`.
+- **`memory_memgraph_integration.test.ts`**: Fixed stale MemVector index cleanup in `beforeAll`. Switched to stable index name `integ_mem0_vector`.
+- **All 4 test files**: Changed default URL from `bolt://localhost:7687` to `bolt://127.0.0.1:7687` (Windows IPv6 `::1` resolution issue).
+
+#### Extended unit tests (openmemory/ui)
+- **`memgraph.test.ts`** (+11 tests: MG_10–MG_20): `closeDriver()` (close + null singleton, no-op when uninitialized), `initSchema()` error handling ("violates" ignored, "experimental" ignored, unknown rethrown), `ensureVectorIndexes()` (no-op when present, re-create memory_vectors, re-create entity_vectors, re-create both, cached second call, failure logs warning without throwing).
+
+### Coverage Results
+
+| File | Before (stmts) | After (stmts) | Before (funcs) | After (funcs) |
+|------|----------------|----------------|----------------|----------------|
+| `graph_stores/memgraph.ts` | 2.65% | **94.69%** | 0% | **94.44%** |
+| `vector_stores/memgraph.ts` | 2.94% | **95.58%** | 0% | **93.93%** |
+| `MemgraphHistoryManager.ts` | 9.52% | **90.47%** | 0% | **86.66%** |
+| `openmemory/ui memgraph.ts` | 63% | **95.77%** | — | **100%** |
+
+### Test Counts
+- **mem0-ts memgraph suites**: 4 suites, 64 tests (15 graph_store + 23 memory_pipeline + 17 vector_store + 9 history_manager)
+- **openmemory/ui**: 45 suites, 324 tests (20 memgraph tests, up from 9)
+- All tests pass with `--runInBand` (Memgraph requires sequential execution to avoid connection storms)
+
+### Patterns
+- **Memgraph WHERE-after-YIELD**: `CALL procedure() YIELD x WHERE ...` is NOT valid Memgraph Cypher. Must use `CALL procedure() YIELD x WITH x WHERE ...`.
+- **Memgraph ORDER-BY-after-WHERE**: `WITH x WHERE cond ORDER BY x` is NOT valid. Must use `WITH x WHERE cond WITH x ORDER BY x`.
+- **One vector index per label+property**: Memgraph enforces a single vector index per (label, property) pair. Tests must use stable index names and clean up stale indexes in `beforeAll`.
+- **Windows IPv6/IPv4**: `bolt://localhost:7687` fails on Windows because `localhost` resolves to `::1` (IPv6). Always use `bolt://127.0.0.1:7687`.
+- **Dynamic imports kill coverage**: `await import("./module")` in `beforeAll` prevents Istanbul from instrumenting function bodies. Always use static `import` at module top level.
+- **Memgraph connection storms**: Running 4+ test suites in parallel overwhelms Memgraph (connection closed by server). Use `--runInBand` for integration tests.

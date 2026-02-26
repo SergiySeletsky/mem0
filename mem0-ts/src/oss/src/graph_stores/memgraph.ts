@@ -118,6 +118,7 @@ export class MemgraphGraphStore implements GraphStore {
       const result = await s.run(
         `CALL vector_search.search('${this.indexName}', $limit, $queryEmbedding)
          YIELD node, similarity
+         WITH node, similarity
          WHERE node.user_id = $uid AND similarity >= $threshold
          RETURN node.id AS id, node.name AS name, node.type AS type,
                 node.properties AS properties, similarity
@@ -196,6 +197,7 @@ export class MemgraphGraphStore implements GraphStore {
       const result = await s.run(
         `CALL vector_search.search('${this.indexName}', $searchLimit, $queryEmbedding)
          YIELD node, similarity
+         WITH node, similarity
          WHERE node.user_id = $uid AND similarity >= $threshold
          WITH node, similarity
          ORDER BY similarity DESC
@@ -207,6 +209,7 @@ export class MemgraphGraphStore implements GraphStore {
          UNION
          CALL vector_search.search('${this.indexName}', $searchLimit, $queryEmbedding)
          YIELD node, similarity
+         WITH node, similarity
          WHERE node.user_id = $uid AND similarity >= $threshold
          WITH node, similarity
          ORDER BY similarity DESC
