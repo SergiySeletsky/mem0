@@ -2143,3 +2143,112 @@ See [AUDIT_REPORT_SESSION13.md](AUDIT_REPORT_SESSION13.md) for full details.
 - `search_memory` (browse): 1 call — full inventory retrieval
 - `search_memory` (search): 1 call — HIGH finding retrieval
 - Tools not used: `create_memory_relation`, `get_memory_map`, `search_memory_entities` — these would have been valuable for building a finding-to-file entity graph
+
+---
+
+## Session 15 — Deep Architectural Audit: Frontend + API Security (2026-02-27)
+
+### Objective
+Third audit session as agentic architect. Focus expanded beyond backend to include all API routes, frontend Redux state management, hooks, and type system integrity. Used OpenMemory MCP as LTM for cross-session continuity.
+
+### LTM Recall
+- 2 `search_memory` calls recovered 40 memories from Sessions 11–14
+- Full audit context (specific line numbers, finding IDs, file paths) recovered without re-reading code
+- RRF ranking correctly prioritized audit summaries (0.95–0.98 relevance)
+
+### Findings (22 new)
+
+**HIGH (8):**
+- ENTITY-009: Next.js 15 params not awaited in `entities/[entityId]/route.ts`
+- CONFIG-003: No input validation on config PUT/PATCH — arbitrary key injection
+- CONFIG-004: N+1 write pattern + no auth on config routes
+- CATEGORIZE-001: Bare MATCH + N+1 writes in `categorize.ts`
+- FRONTEND-003: Stale closure in `useMemoriesApi.ts` — data loss risk
+- FRONTEND-004: Conflicting Category types (`string` vs `{ id, name, ... }`)
+- FRONTEND-005: `useStats.fetchStats` never resets `isLoading` on success
+- FRONTEND-008: Missing `user_id` on `fetchAppAccessedMemories` — Spec 09 violation
+
+**MEDIUM (9):**
+- ENTITY-010/011: Bare Memory MATCH + wrong count in entity routes
+- LINK-001: `linkMemoryToEntity()` missing User anchor
+- API-005: `apps/route.ts` no try/catch + missing bi-temporal filter
+- API-006: `memories/[memoryId]/route.ts` no try/catch + inconsistent response
+- FRONTEND-006: Dual-state anti-pattern (local useState + Redux) across all hooks
+- FRONTEND-007: 1024-dim vectors in Redux client state + dead filter actions
+- MCP-005: `activeTransports` module export causes TS2344 error
+- VECTORSEARCH-001: Session 14 SEARCH-002 partially mitigated
+
+**LOW (5):** STATS-001, CLUSTERS-001, EXTRACT-001, CONTEXT-001, FRONTEND-009
+
+### Key Insight
+The **frontend layer has more HIGH severity issues (5) than the backend**. Stale closure bug, stuck loading spinner, and namespace isolation violation are user-facing defects that would manifest in production. Prior sessions focused almost exclusively on the data layer.
+
+### Files Read (30+)
+write.ts (292), memgraph.ts (363), bulk.ts (204), server.ts (1234), hybrid.ts (132), resolve.ts (336), worker.ts (80), dedup/index.ts (121), config/helpers.ts (135), link.ts (28), vector.ts (68), text.ts (50), all API routes (stats, entities, clusters, apps, config, memories/*, backup/*), all Redux slices (store, memoriesSlice, appsSlice, filtersSlice, profileSlice, uiSlice), all hooks (useMemoriesApi, useAppsApi, useFiltersApi, useStats, useUI), extract.ts, categorize.ts, context.ts, search.ts
+
+### MCP Tool Usage
+| Tool | Calls | Items | Verdict |
+|------|-------|-------|---------|
+| `search_memory` | 2 | 40 recalled | Excellent — full cross-session continuity |
+| `add_memories` | 4 | 22 stored | Excellent — correct dedup, no false SUPERSEDE |
+
+### Unfixed HIGH from Prior Sessions
+- ENTITY-006 (S13/14): worker.ts bare MATCH — **still unfixed**
+- ARCH-001-DEEP (S14): 3-way write pipeline duplication — **still unfixed**
+- ARCH-002 (S14): server.ts God File — **still unfixed**
+- INFRA-002 (S14): Unvalidated backup import — **still unfixed**
+- API-003 (S14): backup/export no User anchor — **still unfixed**
+
+### Verification
+- 334 tests passing, 45 suites
+- 2 tsc errors: entities params (pre-existing) + MCP SSE activeTransports (MCP-005)
+- Full audit report: [AUDIT_REPORT_SESSION15.md](AUDIT_REPORT_SESSION15.md)
+
+---
+
+## Session 16 — 2-Tool MCP Architecture Refactor
+
+### Objective
+Collapse the 10-tool MCP API surface to 2 tools (`add_memories` + `search_memory`) with server-side intent classification and entity-aware search enrichment. Motivated by the Session 15 finding that only `search_memory` (5 calls) and `add_memories` (17 calls) were used across 3 audit sessions — 8 tools had zero usage.
+
+### Architecture
+
+**Before:** 10 tools — `add_memories`, `search_memory`, `update_memory`, `search_memory_entities`, `get_memory_entity`, `get_related_memories`, `get_memory_map`, `create_memory_relation`, `delete_memory_relation`, `delete_memory_entity`
+
+**After:** 2 tools — `add_memories` (writes + intent classification) + `search_memory` (reads + entity enrichment)
+
+Intent classification (`classifyIntent`):
+- Fast regex pre-filter (`mightBeCommand()`) — skips LLM for obvious facts
+- LLM fallback — structured JSON prompt with 3 intents: STORE, INVALIDATE, DELETE_ENTITY
+- Fail-open: any error defaults to STORE (isolated try/catch around classify, separate from write pipeline catch)
+
+Entity enrichment in `search_memory`:
+- `searchEntities(query, userId, { limit: 5 })` auto-enriches search results
+- Best-effort (try/catch, never blocks search results)
+- `include_entities` param (default true) allows opting out
+
+### Files Created
+1. `lib/mcp/classify.ts` (~105 lines) — Intent classifier
+2. `lib/mcp/entities.ts` (~230 lines) — searchEntities, invalidateMemoriesByDescription, deleteEntityByNameOrId
+
+### Files Modified
+3. `lib/mcp/server.ts` — Rewritten from 1234 to ~430 lines. Removed 8 tools, added intent classification step + entity enrichment. Server version bumped to 2.0.0.
+4. `tests/unit/mcp/tools.test.ts` — Removed 8 deprecated tool test blocks (~650 lines). Added 5 new tests: MCP_ADD_09 (INVALIDATE), MCP_ADD_10 (DELETE_ENTITY), MCP_ADD_11 (fail-open), MCP_SM_05 (entity enrichment), MCP_SM_06 (include_entities=false). Preserved extraction drain tests.
+
+### Bugs Found & Fixed During Implementation
+1. **Fail-open classification error**: `classifyIntent` threw inside the outer try/catch, turning the memory into an ERROR event instead of storing it. Fix: isolated try/catch around `classifyIntent` with explicit STORE fallback.
+2. **PowerShell encoding corruption**: `Set-Content -Encoding utf8` corrupted UTF-8 multi-byte characters. Fix: delete + recreate file with `create_file`.
+3. **Test interaction leak**: MCP_ADD_11's unconsumed `mockResolvedValueOnce` leaked into drain tests. Fix: the fail-open server fix ensures the mock is consumed, and drain tests run clean.
+
+### Verification
+- `tsc --noEmit`: 2 pre-existing errors only (entities params, activeTransports)
+- `jest --runInBand`: 315 tests, 45 suites, 0 failures
+- MCP tool tests: 31 tests, all passing
+
+## Patterns
+
+- **classifyIntent fail-open**: Always wrap `classifyIntent()` in its own try/catch with STORE default. The outer write-pipeline catch converts errors to ERROR events, which would lose the memory.
+- **invalidateMemoriesByDescription** returns `Array<{id, content}>`, not a count.
+- **DeleteEntityResult.entity** is a string (entity name), not an object.
+- **HybridSearchResult** fields: `rrfScore` (not `score`), `categories`/`appName`/`createdAt` (no `updatedAt`).
+- **EntityProfile.relationships** require `source`, `type`, `target`, `description` (all four fields).

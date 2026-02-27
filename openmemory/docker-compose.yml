@@ -6,6 +6,7 @@
 services:
   memgraph:
     image: memgraph/memgraph-mage:latest
+    restart: unless-stopped
     ports:
       - "7687:7687"   # Bolt protocol (neo4j-driver)
       - "7444:7444"   # Memgraph Lab UI (optional, dev/debug)
