@@ -69,7 +69,7 @@ services:
 
   # ── 1. Memgraph MAGE ───────────────────────────────────────────────────────
   memgraph:
-    image: memgraph/memgraph-mage:latest
+    image: memgraph/memgraph-mage:3.3
     restart: unless-stopped
     depends_on:
       init-sysctl:
@@ -84,7 +84,7 @@ services:
       - memgraph-logs:/var/log/memgraph
     command:
       - --storage-properties-on-edges=true    # edge props: SUPERSEDES.at, HAS_CATEGORY.assignedAt, etc.
-      - --experimental-enabled=text-search    # BM25 full-text search (Spec 02)
+      - --experimental-enabled=text-search    # BM25 full-text search (Spec 02, v3.3)
       - --storage-snapshot-interval-sec=300   # snapshot every 5 min
       - --storage-snapshot-on-exit=true       # clean snapshot on SIGTERM
       - --storage-snapshot-retention-count=3  # keep last 3 snapshots

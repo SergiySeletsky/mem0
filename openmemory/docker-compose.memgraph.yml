@@ -1,0 +1,38 @@
+## docker-compose.memgraph.yml — Memgraph MAGE only
+## Deploy as a Portainer STANDALONE Compose stack (not Swarm).
+## Plain named volumes — no bind mounts, no host paths required.
+##
+## REQUIRED before deploying on TrueNAS SCALE:
+##   TrueNAS UI → System → Advanced → Sysctl → Add:
+##   vm.max_map_count = 1048576
+##   (Memgraph HNSW vector indexes require this — without it the process crashes)
+
+volumes:
+  memgraph-data: {}
+  memgraph-logs: {}
+
+services:
+
+  memgraph:
+    image: memgraph/memgraph-mage:3.3
+    restart: unless-stopped
+    ports:
+      - "37687:7687"
+      - "37444:7444"
+    volumes:
+      - memgraph-data:/var/lib/memgraph
+      - memgraph-logs:/var/log/memgraph
+    command:
+      - --storage-properties-on-edges=true
+      - --experimental-enabled=text-search
+      - --storage-snapshot-interval-sec=300
+      - --storage-snapshot-on-exit=true
+      - --storage-snapshot-retention-count=3
+      - --log-level=WARNING
+    mem_limit: 64g
+    mem_reservation: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
