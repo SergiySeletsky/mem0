@@ -173,7 +173,6 @@ export async function bulkAddMemories(
       content:             mem.content,
       embedding:           mem.embedding,
       validAt:             mem.validAt,
-      invalidAt:           null,
       createdAt:           mem.createdAt,
       state:               mem.state,
       extractionStatus:    'pending',

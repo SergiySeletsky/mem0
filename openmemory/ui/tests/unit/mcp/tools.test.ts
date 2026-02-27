@@ -90,7 +90,6 @@ jest.mock("@/lib/embeddings/openai", () => ({
 jest.mock("@/lib/memory/write", () => ({
   addMemory: jest.fn(),
   deleteMemory: jest.fn(),
-  deleteAllMemories: jest.fn(),
   supersedeMemory: jest.fn(),
 }));
 
@@ -325,6 +324,56 @@ describe("MCP Tool Handlers — add_memories", () => {
     expect(parsed.results[2].id).toBe("supersede-id");
     // entity extraction only for ADD and SUPERSEDE items
     expect(mockProcessEntityExtraction).toHaveBeenCalledTimes(2);
+  });
+
+  it("MCP_ADD_09: explicit categories are written via runWrite after memory creation", async () => {
+    mockCheckDeduplication.mockResolvedValueOnce({ action: "add" } as any);
+    mockAddMemory.mockResolvedValueOnce("cat-mem-id");
+    mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
+    mockRunWrite.mockResolvedValue([]); // category MERGE calls
+
+    const result = await client.callTool({
+      name: "add_memories",
+      arguments: {
+        content: "TypeScript is the best language",
+        categories: ["Technology", "Work"],
+      },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toHaveLength(1);
+    expect(parsed.results[0].event).toBe("ADD");
+    expect(parsed.results[0].id).toBe("cat-mem-id");
+
+    // runWrite should have been called for each explicit category
+    const categoryWriteCalls = mockRunWrite.mock.calls.filter(
+      (call) => typeof call[0] === "string" && (call[0] as string).includes("HAS_CATEGORY")
+    );
+    expect(categoryWriteCalls).toHaveLength(2);
+    // Verify category names match what was passed
+    const catNames = categoryWriteCalls.map((c) => (c[1] as Record<string, unknown>).name);
+    expect(catNames).toContain("Technology");
+    expect(catNames).toContain("Work");
+  });
+
+  it("MCP_ADD_10: no categories param — no explicit category writes (LLM handles it)", async () => {
+    mockCheckDeduplication.mockResolvedValueOnce({ action: "add" } as any);
+    mockAddMemory.mockResolvedValueOnce("no-cat-mem-id");
+    mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
+
+    const result = await client.callTool({
+      name: "add_memories",
+      arguments: { content: "I like pizza" },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results[0].event).toBe("ADD");
+
+    // No explicit runWrite calls for categories (LLM categorizer is inside addMemory, not mocked here)
+    const categoryWriteCalls = mockRunWrite.mock.calls.filter(
+      (call) => typeof call[0] === "string" && (call[0] as string).includes("HAS_CATEGORY")
+    );
+    expect(categoryWriteCalls).toHaveLength(0);
   });
 });
 

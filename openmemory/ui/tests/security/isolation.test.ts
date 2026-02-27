@@ -55,7 +55,6 @@ jest.mock("@/lib/memory/write", () => ({
   supersedeMemory: jest.fn(),
   archiveMemory: jest.fn().mockResolvedValue(true),
   pauseMemory: jest.fn().mockResolvedValue(true),
-  deleteAllMemories: jest.fn().mockResolvedValue(0),
   updateMemoryState: jest.fn(),
 }));
 

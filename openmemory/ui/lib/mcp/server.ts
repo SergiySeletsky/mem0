@@ -62,6 +62,16 @@ const addMemoriesSchema = {
       "memories in a single call — avoids N round-trips when ingesting a document or " +
       "a batch of architectural decisions at once."
     ),
+  categories: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Optional explicit category tags to attach to the memory (e.g. ['Work', 'Architecture']). " +
+      "When provided, these categories are written immediately — the LLM auto-categorizer still " +
+      "runs and may add additional categories. When omitted, categories are assigned automatically. " +
+      "Well-known categories: Personal, Work, Health, Finance, Travel, Education, Entertainment, " +
+      "Food, Technology, Sports, Social, Shopping, Family, Goals, Preferences — but any string is accepted."
+    ),
 };
 const updateMemorySchema = {
   memory_id: z.string().optional().describe(
@@ -150,7 +160,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         "Supports automatic deduplication — existing memories are updated rather than duplicated.",
       inputSchema: addMemoriesSchema,
     },
-    async ({ content }) => {
+    async ({ content, categories: explicitCategories }) => {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
       if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
 
@@ -220,6 +230,20 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
             }
 
             const event = dedup.action === "supersede" ? "SUPERSEDE" : "ADD";
+
+            // Write explicit categories (if provided) immediately after the memory is created.
+            // The LLM auto-categorizer (inside addMemory/supersedeMemory) still runs
+            // fire-and-forget and may add additional categories via MERGE (no duplicates).
+            if (explicitCategories && explicitCategories.length > 0) {
+              for (const catName of explicitCategories) {
+                await runWrite(
+                  `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memId})
+                   MERGE (c:Category {name: $name})
+                   MERGE (m)-[:HAS_CATEGORY]->(c)`,
+                  { userId, memId: id, name: catName }
+                ).catch((e: unknown) => console.warn("[explicit category]", e));
+              }
+            }
 
             // Spec 04: Async entity extraction — tracked so next iteration can drain it
             prevExtractionPromise = processEntityExtraction(id)

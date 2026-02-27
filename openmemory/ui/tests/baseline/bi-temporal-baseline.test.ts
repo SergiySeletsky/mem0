@@ -93,18 +93,22 @@ describe("BASELINE: Bi-temporal (pre-Spec 01)", () => {
   });
 
   // -------------------------------------------------------------------------
-  test("BITEMPORAL_ISSUE_01 [RESOLVED Spec 01]: addMemory now sets validAt and invalidAt", async () => {
+  test("BITEMPORAL_ISSUE_01 [RESOLVED Spec 01]: addMemory now sets validAt (invalidAt absent = null)", async () => {
     // Original issue: addMemory had NO validAt/invalidAt
-    // Status: RESOLVED -- Spec 01 added bi-temporal properties to CREATE
+    // Status: RESOLVED -- Spec 01 added bi-temporal validAt to CREATE.
+    // invalidAt is NOT set explicitly on new nodes; Memgraph rejects null literals
+    // in CREATE/MERGE property maps. An absent property IS null in Cypher semantics
+    // so WHERE m.invalidAt IS NULL correctly selects live nodes.
     mockSession.run.mockResolvedValue({ records: [], summary: {} });
 
     const { addMemory } = require("@/lib/memory/write");
     await addMemory("I live in NYC", { userId: "alice", appName: "test-app" });
 
     const cypher = allCypher();
-    // RESOLVED: temporal properties are now set
+    // RESOLVED: validAt is set; invalidAt is intentionally absent (null by default)
     expect(cypher).toContain("validAt");
-    expect(cypher).toContain("invalidAt");
+    // invalidAt must NOT be in the CREATE literal — Memgraph forbids null property literals
+    expect(cypher).not.toContain("invalidAt: null");
   });
 
   // -------------------------------------------------------------------------

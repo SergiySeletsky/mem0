@@ -101,28 +101,24 @@ describe("SPEC 01: Bi-Temporal Memory Model", () => {
   });
 
   // -------------------------------------------------------------------------
-  test("BT_01: addMemory includes validAt and invalidAt: null in the Memory CREATE", async () => {
+  test("BT_01: addMemory includes validAt in the Memory CREATE (invalidAt absent = null)", async () => {
     mockSession.run.mockResolvedValue({ records: [], summary: {} });
 
     const { addMemory } = require("@/lib/memory/write");
     await addMemory("I live in NYC", { userId: "alice", appName: "test-app" });
 
     const cypher = allCypher();
-    // After Spec 01: temporal fields must appear in the CREATE statement
+    // After Spec 01: validAt must appear in the CREATE statement
     expect(cypher).toContain("validAt");
-    expect(cypher).toContain("invalidAt");
 
-    // invalidAt must be set to null (current fact)
+    // invalidAt must NOT be set as a null literal — Memgraph forbids null property literals
+    // in CREATE/MERGE. An absent property IS semantically null; WHERE m.invalidAt IS NULL
+    // correctly selects live nodes.
+    expect(cypher).not.toContain("invalidAt: null");
+    // Should NOT be in the addMemory CREATE params either (only set during soft-delete / supersede)
     const params = allParams();
-    const createCallParams = params.find(
-      (p) => "invalidAt" in p || cypher.includes("invalidAt: null")
-    );
-    // Either the param is explicitly null or the Cypher hard-codes null
-    const hasNullInvalidAt =
-      createCallParams?.invalidAt === null ||
-      cypher.includes("invalidAt: null") ||
-      cypher.includes("invalidAt: $invalidAt");
-    expect(hasNullInvalidAt).toBe(true);
+    const hasInvalidAtParam = params.some((p) => "invalidAt" in p && p.invalidAt === null);
+    expect(hasInvalidAtParam).toBe(false);
   });
 
   // -------------------------------------------------------------------------

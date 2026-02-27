@@ -4,7 +4,7 @@
  * Spec 00: Memgraph port
  */
 import { NextRequest, NextResponse } from "next/server";
-import { archiveMemory, deleteAllMemories } from "@/lib/memory/write";
+import { archiveMemory } from "@/lib/memory/write";
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
@@ -12,9 +12,7 @@ export async function POST(request: NextRequest) {
   if (!user_id) return NextResponse.json({ detail: "user_id required" }, { status: 400 });
 
   if (!memory_ids || memory_ids.length === 0) {
-    // archive all
-    await deleteAllMemories(user_id); // soft-delete not archive-all, use runWrite directly
-    return NextResponse.json({ message: "All memories archived" });
+    return NextResponse.json({ detail: "memory_ids required" }, { status: 400 });
   }
   const results = await Promise.all(
     memory_ids.map((id: string) => archiveMemory(id, user_id))

@@ -96,7 +96,6 @@ export async function addMemory(
        embedding: $embedding,
        metadata: $metadata,
        validAt: $now,
-       invalidAt: null,
        createdAt: $now,
        updatedAt: $now
      })
@@ -191,7 +190,6 @@ export async function supersedeMemory(
        embedding: $embedding,
        metadata: '{}',
        validAt: $now,
-       invalidAt: null,
        createdAt: $now,
        updatedAt: $now
      })
@@ -270,39 +268,6 @@ export async function pauseMemory(
     { userId, id: memoryId, updatedAt: new Date().toISOString() }
   );
   return rows.length > 0;
-}
-
-// ---------------------------------------------------------------------------
-// Write: deleteAll
-// ---------------------------------------------------------------------------
-
-/**
- * Hard delete all memories for a user (or scoped to an app if provided).
- */
-export async function deleteAllMemories(
-  userId: string,
-  appName?: string
-): Promise<number> {
-  const params: Record<string, unknown> = { userId };
-  let query: string;
-
-  if (appName) {
-    params.appName = appName;
-    query = `
-      MATCH (u:User {userId: $userId})-[:HAS_APP]->(a:App {appName: $appName})
-      MATCH (u)-[:HAS_MEMORY]->(m:Memory)-[:CREATED_BY]->(a)
-      DETACH DELETE m
-      RETURN count(m) AS deleted`;
-  } else {
-    query = `
-      MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)
-      DETACH DELETE m
-      RETURN count(m) AS deleted`;
-  }
-
-  const rows = await runWrite(query, params);
-  const raw = rows[0]?.deleted;
-  return typeof raw === "number" ? raw : (raw as { low?: number })?.low ?? 0;
 }
 
 // ---------------------------------------------------------------------------

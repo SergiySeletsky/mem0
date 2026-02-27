@@ -2,7 +2,7 @@
  * P1 — lib/memory/write.ts unit tests
  *
  * Covers: addMemory, updateMemory, supersedeMemory, deleteMemory,
- *         archiveMemory, pauseMemory, deleteAllMemories, getMemory
+ *         archiveMemory, pauseMemory, getMemory
  *
  * All DB + embedding calls are mocked — no running Memgraph needed.
  */
@@ -42,7 +42,6 @@ import {
   deleteMemory,
   archiveMemory,
   pauseMemory,
-  deleteAllMemories,
   getMemory,
 } from "@/lib/memory/write";
 
@@ -256,33 +255,6 @@ describe("pauseMemory", () => {
     expect(ok).toBe(true);
     const cypher = mockRunWrite.mock.calls[0][0] as string;
     expect(cypher).toContain("state = 'paused'");
-  });
-});
-
-// ==========================================================================
-// deleteAllMemories
-// ==========================================================================
-describe("deleteAllMemories", () => {
-  test("WR_60: hard-deletes all memories for user", async () => {
-    mockRunWrite.mockResolvedValue([{ deleted: 5 }]);
-    const count = await deleteAllMemories("u1");
-    expect(count).toBe(5);
-    const cypher = mockRunWrite.mock.calls[0][0] as string;
-    expect(cypher).toContain("DETACH DELETE");
-  });
-
-  test("WR_61: scopes to app when appName provided", async () => {
-    mockRunWrite.mockResolvedValue([{ deleted: 2 }]);
-    const count = await deleteAllMemories("u1", "myApp");
-    expect(count).toBe(2);
-    const cypher = mockRunWrite.mock.calls[0][0] as string;
-    expect(cypher).toContain(":App {appName: $appName}");
-  });
-
-  test("WR_62: returns 0 when no memories found", async () => {
-    mockRunWrite.mockResolvedValue([]);
-    const count = await deleteAllMemories("u1");
-    expect(count).toBe(0);
   });
 });
 

@@ -2104,3 +2104,42 @@ Investigate and fix the "Connection was closed by server" and "Tantivy error: An
 - **Generic type args on `require()` results**: TypeScript TS2347 — can't use `<T>` on `any`-typed functions from `require()`. Use explicit type annotation on the result variable instead.
 - **Tantivy write contention**: Any code that calls multiple `runWrite` sessions concurrently risks Tantivy index writer conflicts. Always drain fire-and-forget extractors before the next write.
 - **Spec 09 namespace isolation**: ALL Cypher queries traversing Memory or Entity nodes MUST anchor through `(u:User {userId: $userId})`. Bare `MATCH (:Memory {id})` without User path violates namespace isolation.
+---
+
+## Session 13 — Agentic Architectural Audit (2026-02-27)
+
+### Objective
+Large-scale repo audit as an agentic architect, using OpenMemory MCP as long-term memory to handle context-window overflow. Goal: identify refactoring opportunities and systemic issues across all layers.
+
+### Critical Bug Fixed
+- **lib/memory/write.ts** — Removed `invalidAt: null` literal from `addMemory()` CREATE and `supersedeMemory()` CREATE. Memgraph rejects null literals in property maps.
+- **lib/memory/bulk.ts** — Removed `invalidAt: null` from UNWIND+CREATE Cypher.
+- **4 tests updated** (`bi-temporal-baseline.test.ts` BT01, `bi-temporal.test.ts` BT_01).
+- **Verification**: `pnpm exec jest --no-coverage --runInBand` → **335 tests, 0 failures**.
+
+### Architectural Findings (34 total)
+
+**HIGH (7):**
+- WRITE-002: `deleteAllMemories()` DETACH DELETE destroys `:SUPERSEDES` history
+- ARCH-001: Write path duplicated between REST POST handler and MCP add_memories
+- ENTITY-002: `confirmMergeViaLLM()` has no timeout — can block indefinitely
+- API-001: N+1 query pattern for category fetching (one runRead per memory)
+- CLUSTER-001: Louvain runs on entire graph, not user-scoped subgraph
+- INFRA-001: `specs/` directory is empty — spec docs exist only as code comments
+
+**MEDIUM (15):** DB-002, DB-004, WRITE-001, WRITE-003, WRITE-004, ENTITY-001, ENTITY-003, ENTITY-004, ENTITY-005, SEARCH-001, SEARCH-002, MCP-001, API-002, CONFIG-001, CLUSTER-002, FRONTEND-001, FRONTEND-002, INFRA-002, VALIDATION-001
+
+**LOW (7):** DB-003, DB-005, CONFIG-002, MCP-002, SEARCH-003, FRONTEND-003, VALIDATION-002
+
+See [AUDIT_REPORT_SESSION13.md](AUDIT_REPORT_SESSION13.md) for full details.
+
+### Patterns Added
+- **Null literals in Cypher CREATE**: Memgraph rejects `{prop: null}` in CREATE/MERGE property maps. Absent properties are semantically null — do NOT initialise to null. Use `SET node.prop = null` only when explicitly invalidating.
+- **LLM timeouts required**: Any fire-and-forget or inline LLM call must be wrapped in `Promise.race([call, timeout(N)])` to prevent pipeline stalls.
+- **User anchor in ALL writes**: Entity update queries (`MATCH (e:Entity {id: $entityId})`) must anchor through User for Spec 09 compliance — same rule as Memory queries.
+
+### MCP Tool Effectiveness (this session)
+- `add_memories` (array form): 9 calls, 34 findings stored — most valuable tool
+- `search_memory` (browse): 1 call — full inventory retrieval
+- `search_memory` (search): 1 call — HIGH finding retrieval
+- Tools not used: `create_memory_relation`, `get_memory_map`, `search_memory_entities` — these would have been valuable for building a finding-to-file entity graph
