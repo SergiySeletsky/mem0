@@ -639,7 +639,7 @@ describe("MCP Tool Handlers — update_memory", () => {
 
     const result = await client.callTool({
       name: "update_memory",
-      arguments: { memory_id: "old-mem-id", new_text: "Updated fact about Alice" },
+      arguments: { memory_id: "old-mem-id", text: "Updated fact about Alice" },
     });
 
     const parsed = parseToolResult(result as any) as any;
@@ -656,7 +656,7 @@ describe("MCP Tool Handlers — update_memory", () => {
 
     const result = await client.callTool({
       name: "update_memory",
-      arguments: { memory_id: "nonexistent", new_text: "Doesn't matter" },
+      arguments: { memory_id: "nonexistent", text: "Doesn't matter" },
     });
 
     const text = (result as any).content[0].text;
@@ -671,7 +671,7 @@ describe("MCP Tool Handlers — update_memory", () => {
 
     await client.callTool({
       name: "update_memory",
-      arguments: { memory_id: "old-id", new_text: "New version with entities" },
+      arguments: { memory_id: "old-id", text: "New version with entities" },
     });
 
     expect(mockProcessEntityExtraction).toHaveBeenCalledWith("new-v2-id");
@@ -1260,5 +1260,109 @@ describe("MCP Tool Handlers — get_memory_map", () => {
 
     const parsed = parseToolResult(result as any) as any;
     expect(parsed.error).toBe("Entity not found");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Extraction drain (Tantivy concurrency prevention)
+// ---------------------------------------------------------------------------
+describe("MCP add_memories — extraction drain (Tantivy concurrency prevention)", () => {
+  let client: Client;
+
+  beforeAll(async () => {
+    ({ client } = await setupClientServer());
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRunRead.mockResolvedValue([]);
+    mockRunWrite.mockResolvedValue([]);
+  });
+
+  it("MCP_ADD_DRAIN: entity extraction from item N completes before item N+1's addMemory starts", async () => {
+    const execOrder: string[] = [];
+
+    // Item 1 extraction takes 50ms — should be awaited (drain) before item 2 addMemory
+    mockCheckDeduplication.mockResolvedValue({ action: "add" } as any);
+    mockAddMemory
+      .mockImplementationOnce(async () => {
+        execOrder.push("addMemory-1");
+        return "id-1";
+      })
+      .mockImplementationOnce(async () => {
+        execOrder.push("addMemory-2");
+        return "id-2";
+      });
+
+    let extraction1Resolved = false;
+    mockProcessEntityExtraction
+      .mockImplementationOnce(async () => {
+        execOrder.push("extraction-1-start");
+        await new Promise<void>((r) => setTimeout(r, 50));
+        extraction1Resolved = true;
+        execOrder.push("extraction-1-done");
+      })
+      .mockImplementationOnce(async () => {
+        execOrder.push("extraction-2-start");
+      });
+
+    const result = await client.callTool({
+      name: "add_memories",
+      arguments: { content: ["memory one", "memory two"] },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toHaveLength(2);
+    expect(parsed.results[0].id).toBe("id-1");
+    expect(parsed.results[1].id).toBe("id-2");
+
+    // extraction-1-done must appear before addMemory-2 in the execution order
+    const ext1DoneIdx = execOrder.indexOf("extraction-1-done");
+    const addMem2Idx = execOrder.indexOf("addMemory-2");
+    if (ext1DoneIdx !== -1 && addMem2Idx !== -1) {
+      expect(ext1DoneIdx).toBeLessThan(addMem2Idx);
+    }
+    // extraction-1 must have resolved
+    expect(extraction1Resolved).toBe(true);
+  });
+
+  it("MCP_ADD_DRAIN_TIMEOUT: if extraction hangs >3 s batch continues (does not deadlock)", async () => {
+    jest.useFakeTimers({ advanceTimers: false });
+
+    mockCheckDeduplication.mockResolvedValue({ action: "add" } as any);
+    mockAddMemory
+      .mockResolvedValueOnce("id-1")
+      .mockResolvedValueOnce("id-2");
+
+    // Item 1 extraction never resolves (simulates a hung Tantivy writer)
+    let hangResolved = false;
+    mockProcessEntityExtraction
+      .mockImplementationOnce(
+        () => new Promise<void>((r) => {
+          // resolve after 10 s (beyond the 3 s drain timeout)
+          setTimeout(() => { hangResolved = true; r(); }, 10_000);
+        })
+      )
+      .mockResolvedValueOnce(undefined);
+
+    const callPromise = client.callTool({
+      name: "add_memories",
+      arguments: { content: ["memory one", "memory two"] },
+    });
+
+    // Advance fake timers by 3.1 s to trigger the drain timeout
+    await jest.advanceTimersByTimeAsync(3_100);
+
+    const result = await callPromise;
+    const parsed = parseToolResult(result as any) as any;
+
+    // Both items must have been processed (batch didn't hang)
+    expect(parsed.results).toHaveLength(2);
+    expect(parsed.results[0].id).toBe("id-1");
+    expect(parsed.results[1].id).toBe("id-2");
+    // The extraction was NOT yet resolved (we only advanced 3.1 s, timeout is 10 s)
+    expect(hangResolved).toBe(false);
+
+    jest.useRealTimers();
   });
 });

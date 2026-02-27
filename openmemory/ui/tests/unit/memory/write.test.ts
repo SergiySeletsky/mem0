@@ -94,13 +94,13 @@ describe("addMemory", () => {
     expect(createCall).toContain("User {userId: $userId}");
   });
 
-  test("WR_06: attaches App node when appName provided", async () => {
+  test("WR_06: attaches App node when appName provided — inline in the same CREATE call", async () => {
     await addMemory("test", { userId: "u1", appName: "cursor" });
-    // 3rd call should attach App
-    expect(mockRunWrite.mock.calls.length).toBeGreaterThanOrEqual(3);
-    const appCall = mockRunWrite.mock.calls[2][0] as string;
-    expect(appCall).toContain(":App");
-    expect(appCall).toContain("CREATED_BY");
+    // 2 calls: MERGE User (call[0]) + inline CREATE Memory+App (call[1])
+    expect(mockRunWrite.mock.calls.length).toBe(2);
+    const createCall = mockRunWrite.mock.calls[1][0] as string;
+    expect(createCall).toContain(":App");
+    expect(createCall).toContain("CREATED_BY");
   });
 
   test("WR_07: does NOT create App node when appName omitted", async () => {
@@ -168,28 +168,29 @@ describe("updateMemory", () => {
 // supersedeMemory (Spec 01)
 // ==========================================================================
 describe("supersedeMemory", () => {
-  test("WR_30: invalidates old node, creates new node, creates SUPERSEDES edge", async () => {
+  test("WR_30: invalidates old node, creates new node and SUPERSEDES edge — all atomic in one call", async () => {
     const newId = await supersedeMemory("old-id", "new content", "u1");
     expect(typeof newId).toBe("string");
-    // 3 runWrite calls: invalidate old, create new, SUPERSEDES edge
-    expect(mockRunWrite.mock.calls.length).toBeGreaterThanOrEqual(3);
+    // Exactly 1 runWrite call: all steps combined atomically
+    expect(mockRunWrite.mock.calls.length).toBe(1);
 
-    const invalidateCall = mockRunWrite.mock.calls[0][0] as string;
-    expect(invalidateCall).toContain("invalidAt");
-
-    const createCall = mockRunWrite.mock.calls[1][0] as string;
-    expect(createCall.toUpperCase()).toContain("CREATE");
-    expect(createCall).toContain(":Memory");
-
-    const supersedesCall = mockRunWrite.mock.calls[2][0] as string;
-    expect(supersedesCall).toContain("SUPERSEDES");
+    const atomicCall = mockRunWrite.mock.calls[0][0] as string;
+    // Must invalidate old
+    expect(atomicCall).toContain("invalidAt");
+    // Must create new Memory
+    expect(atomicCall.toUpperCase()).toContain("CREATE");
+    expect(atomicCall).toContain(":Memory");
+    // Must create SUPERSEDES edge
+    expect(atomicCall).toContain("SUPERSEDES");
+    // Must be User-anchored (namespace isolation)
+    expect(atomicCall).toContain("User {userId: $userId}");
   });
 
-  test("WR_31: attaches new Memory to App when provided", async () => {
+  test("WR_31: attaches new Memory to App when provided (second call)", async () => {
     await supersedeMemory("old-id", "new", "u1", "vscode");
-    // 4th call: attach to App
-    expect(mockRunWrite.mock.calls.length).toBeGreaterThanOrEqual(4);
-    const appCall = mockRunWrite.mock.calls[3][0] as string;
+    // 2 calls: atomic (steps 1-3) + App attachment
+    expect(mockRunWrite.mock.calls.length).toBe(2);
+    const appCall = mockRunWrite.mock.calls[1][0] as string;
     expect(appCall).toContain(":App");
     expect(appCall).toContain("CREATED_BY");
   });

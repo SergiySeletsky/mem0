@@ -208,6 +208,10 @@ describe("SPEC 00: Memgraph layer contract", () => {
   });
 
   test("MG_11: closeDriver() is a no-op if driver was never created", async () => {
+    // Clear any driver that a previous test may have stored on globalThis so
+    // that this module instance truly sees no driver.
+    (globalThis as { __memgraphDriver?: unknown }).__memgraphDriver = null;
+
     const { closeDriver } = require("@/lib/db/memgraph");
     // Should not throw even though _driver is null
     await expect(closeDriver()).resolves.not.toThrow();
@@ -345,5 +349,107 @@ describe("SPEC 00: Memgraph layer contract", () => {
       expect.stringContaining("query modules not loaded"),
     );
     warnSpy.mockRestore();
+  });
+
+  // ---- withRetry resilience (MG_RETRY) ----
+  // setTimeout is patched to fire immediately so retry delays do not slow tests.
+
+  function noDelaySetTimeout() {
+    jest.spyOn(global, "setTimeout").mockImplementation((fn: any) => { fn(); return 0 as any; });
+  }
+
+  test('MG_RETRY_01: runWrite() retries on "Connection was closed by server" and succeeds on 2nd attempt', async () => {
+    noDelaySetTimeout();
+    mockSession.run
+      .mockRejectedValueOnce(new Error("Connection was closed by server"))
+      .mockResolvedValueOnce({ records: [], summary: {} });
+
+    const { runWrite } = require("@/lib/db/memgraph");
+    await expect(runWrite("CREATE (n)", {})).resolves.not.toThrow();
+
+    // session.run called twice — first attempt failed, second succeeded
+    expect(mockSession.run).toHaveBeenCalledTimes(2);
+  });
+
+  test('MG_RETRY_02: runWrite() retries on "Tantivy error: index writer was killed"', async () => {
+    noDelaySetTimeout();
+    mockSession.run
+      .mockRejectedValueOnce(new Error(
+        "Tantivy error: Unable to add document -> An error occurred in a thread: An index writer was killed"
+      ))
+      .mockResolvedValueOnce({ records: [], summary: {} });
+
+    const { runWrite } = require("@/lib/db/memgraph");
+    await expect(runWrite("CREATE (n)", {})).resolves.not.toThrow();
+    expect(mockSession.run).toHaveBeenCalledTimes(2);
+  });
+
+  test('MG_RETRY_03: runRead() retries on transient "ServiceUnavailable" error', async () => {
+    noDelaySetTimeout();
+    mockSession.run
+      .mockRejectedValueOnce(new Error("ServiceUnavailable"))
+      .mockResolvedValueOnce({ records: [{ keys: ["id"], get: () => "a", toObject: () => ({ id: "a" }) }], summary: {} });
+
+    const { runRead } = require("@/lib/db/memgraph");
+    const result: Array<{ id: string }> = await runRead("MATCH (n) RETURN n.id AS id", {});
+
+    expect(result).toEqual([{ id: "a" }]);
+    expect(mockSession.run).toHaveBeenCalledTimes(2);
+  });
+
+  test("MG_RETRY_04: non-transient errors (Cypher syntax) are NOT retried", async () => {
+    noDelaySetTimeout();
+    mockSession.run.mockRejectedValue(new Error("SyntaxError: Invalid Cypher statement"));
+
+    const { runWrite } = require("@/lib/db/memgraph");
+    await expect(runWrite("INVALID CYPHER", {})).rejects.toThrow("SyntaxError");
+
+    // Only 1 attempt — non-transient, no retry
+    expect(mockSession.run).toHaveBeenCalledTimes(1);
+  });
+
+  test("MG_RETRY_05: after 3 consecutive transient failures the final error is propagated", async () => {
+    noDelaySetTimeout();
+    const transientErr = new Error("Connection was closed by server");
+    mockSession.run
+      .mockRejectedValueOnce(transientErr)
+      .mockRejectedValueOnce(transientErr)
+      .mockRejectedValueOnce(transientErr);
+
+    const { runWrite } = require("@/lib/db/memgraph");
+    await expect(runWrite("CREATE (n)", {})).rejects.toThrow("Connection was closed by server");
+
+    // 3 attempts total (max 3)
+    expect(mockSession.run).toHaveBeenCalledTimes(3);
+  });
+
+  test("MG_RETRY_06: driver is invalidated (globalThis cache cleared) on connection-level error", async () => {
+    noDelaySetTimeout();
+    // First call: connection error; second: succeeds (driver recreated)
+    const neo4j = require("neo4j-driver").default;
+    const driverCallsBefore = neo4j.driver.mock.calls.length;
+
+    mockSession.run
+      .mockRejectedValueOnce(new Error("ECONNREFUSED"))
+      .mockResolvedValueOnce({ records: [], summary: {} });
+
+    const { runWrite } = require("@/lib/db/memgraph");
+    await runWrite("CREATE (n)", {});
+
+    // Driver must have been re-created (invalidated and re-initialised)
+    expect(neo4j.driver.mock.calls.length).toBeGreaterThan(driverCallsBefore);
+  });
+
+  test("MG_DRV_01: getDriver() stores singleton on globalThis (survives module cache invalidation)", async () => {
+    const { getDriver } = require("@/lib/db/memgraph");
+    const d1 = getDriver();
+
+    // Simulate HMR: drop the module from the registry and re-import
+    jest.resetModules();
+    const { getDriver: getDriver2 } = require("@/lib/db/memgraph");
+    const d2 = getDriver2();
+
+    // Both calls should return the same driver instance (stored on globalThis)
+    expect(d1).toBe(d2);
   });
 });

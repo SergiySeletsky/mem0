@@ -197,7 +197,8 @@ export async function resolveEntity(
   );
 
   // Step 2: Find existing entity by normalizedName (case+punctuation-insensitive)
-  let existing = await runWrite<{
+  // Read-only lookup — use runRead to avoid consuming a write-session slot.
+  let existing = await runRead<{
     id: string;
     name: string;
     type: string;
@@ -281,14 +282,18 @@ export async function resolveEntity(
       );
     }
   } else {
-    // Create new entity with normalizedName stored for fast future lookups
+    // Create new entity and attach to User atomically in a single session.
+    // Anchoring through User prevents orphan Entity nodes if the process dies
+    // between the old two-step write.
     await runWrite(
-      `CREATE (e:Entity {
+      `MATCH (u:User {userId: $userId})
+       CREATE (e:Entity {
          id: $id, userId: $userId,
          name: $name, normalizedName: $normalizedName,
          type: $type, description: $description,
          createdAt: $now, updatedAt: $now
-       })`,
+       })
+       CREATE (u)-[:HAS_ENTITY]->(e)`,
       {
         id,
         userId,
@@ -300,14 +305,6 @@ export async function resolveEntity(
       }
     );
     entityId = id;
-
-    // Create HAS_ENTITY relationship
-    await runWrite(
-      `MATCH (u:User {userId: $userId}) WITH u LIMIT 1
-       MATCH (e:Entity {id: $entityId})
-       MERGE (u)-[:HAS_ENTITY]->(e)`,
-      { userId, entityId }
-    );
   }
 
   // Fire-and-forget: compute description embedding for future semantic dedup lookups

@@ -7,8 +7,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runRead } from "@/lib/db/memgraph";
 
+interface FilterBody {
+  user_id?: string;
+  page?: number;
+  size?: number;
+  page_size?: number;
+  search_query?: string;
+  app_ids?: string[];
+  category_ids?: string[];
+  show_archived?: boolean;
+  filters?: { app_name?: string; categories?: string[]; state?: string };
+}
+
 export async function POST(request: NextRequest) {
-  const body = await request.json();
+  let body: FilterBody;
+  try {
+    body = (await request.json()) as FilterBody;
+  } catch {
+    return NextResponse.json({ detail: "Invalid JSON body" }, { status: 400 });
+  }
+
+  try {
 
   // Accept both the hook's flat format and the legacy nested-filters format
   const user_id: string | undefined = body.user_id;
@@ -83,22 +102,26 @@ export async function POST(request: NextRequest) {
   const total = (countRows[0] as { total?: number })?.total ?? 0;
   const pages = pageSize > 0 ? Math.ceil(total / pageSize) : 1;
 
-  return NextResponse.json({
-    items: rows.map((r) => ({
-      id: r.id,
-      content: r.content,
-      created_at: r.createdAt ?? new Date(0).toISOString(),
-      state: r.state || "active",
-      app_id: null,
-      app_name: r.appName || null,
-      categories: r.categories || [],
-      metadata_: r.metadata
-        ? typeof r.metadata === "string" ? JSON.parse(r.metadata) : r.metadata
-        : null,
-    })),
-    total,
-    page,
-    size: pageSize,
-    pages,
-  });
+    return NextResponse.json({
+      items: rows.map((r) => ({
+        id: r.id,
+        content: r.content,
+        created_at: r.createdAt ?? new Date(0).toISOString(),
+        state: r.state || "active",
+        app_id: null,
+        app_name: r.appName || null,
+        categories: r.categories || [],
+        metadata_: r.metadata
+          ? typeof r.metadata === "string" ? JSON.parse(r.metadata) : r.metadata
+          : null,
+      })),
+      total,
+      page,
+      size: pageSize,
+      pages,
+    });
+  } catch (err) {
+    console.error("[POST /api/v1/memories/filter] error:", err);
+    return NextResponse.json({ detail: "Internal server error" }, { status: 500 });
+  }
 }

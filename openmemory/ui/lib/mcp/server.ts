@@ -64,8 +64,16 @@ const addMemoriesSchema = {
     ),
 };
 const updateMemorySchema = {
-  memory_id: z.string().describe("ID of the existing memory to update"),
-  new_text: z.string().describe("The updated content that replaces the old memory"),
+  memory_id: z.string().optional().describe(
+    "ID of the existing memory — returned by add_memories or search_memory. "
+    + "Provide either memory_id or memory_content."
+  ),
+  memory_content: z.string().optional().describe(
+    "A fragment of the existing memory's text (e.g. 'Alice prefers TypeScript'). "
+    + "The system finds the closest matching live memory and supersedes it. "
+    + "Provide either memory_id or memory_content."
+  ),
+  text: z.string().describe("The updated content that replaces the old memory"),
 };
 
 // Entity & Knowledge tool schemas
@@ -76,11 +84,24 @@ const searchMemoryEntitiesSchema = {
 };
 
 const getMemoryEntitySchema = {
-  entity_id: z.string().describe("The unique ID of the entity to retrieve"),
+  entity_id: z.string().optional().describe(
+    "Exact entity ID — returned by search_memory_entities. Preferred when known."
+  ),
+  entity_name: z.string().optional().describe(
+    "Name of the entity (e.g. 'Alice', 'PaymentService'). "
+    + "The system resolves it internally. Provide either entity_id or entity_name."
+  ),
 };
 
 const getRelatedMemoriesSchema = {
-  entity_name: z.string().describe("The name of the entity to search for (e.g. 'PaymentService')"),
+  entity_name: z.string().optional().describe(
+    "The name of the entity to search for (e.g. 'PaymentService'). " +
+    "Provide either entity_name or entity_id — at least one is required."
+  ),
+  entity_id: z.string().optional().describe(
+    "The unique ID of the entity (from search_memory_entities or get_memory_entity). " +
+    "Preferred over entity_name when the ID is known."
+  ),
 };
 
 const getMemoryMapSchema = {
@@ -96,12 +117,22 @@ const createMemoryRelationSchema = {
   description: z.string().optional().describe("Optional context or details about this relationship"),
 };
 const deleteMemoryRelationSchema = {
-  source_entity: z.string().describe("Name of the source entity"),
-  relationship_type: z.string().describe("The relationship type to remove (e.g. WORKS_AT)"),
-  target_entity: z.string().describe("Name of the target entity"),
+  relationship_id: z.string().optional().describe(
+    "ID of the relationship to remove — returned by create_memory_relation. " +
+    "When provided, source_entity / relationship_type / target_entity are not required."
+  ),
+  source_entity: z.string().optional().describe("Name of the source entity"),
+  relationship_type: z.string().optional().describe("The relationship type to remove (e.g. WORKS_AT)"),
+  target_entity: z.string().optional().describe("Name of the target entity"),
 };
 const deleteMemoryEntitySchema = {
-  entity_id: z.string().describe("The unique ID of the entity to permanently remove"),
+  entity_id: z.string().optional().describe(
+    "Exact entity ID — returned by search_memory_entities. Preferred when known."
+  ),
+  entity_name: z.string().optional().describe(
+    "Name of the entity to delete (e.g. 'Alice'). "
+    + "The system resolves it internally. Provide either entity_id or entity_name."
+  ),
 };
 
 export function createMcpServer(userId: string, clientName: string): McpServer {
@@ -134,48 +165,82 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
 
       try {
         /**
-         * Process every item concurrently:
-         *   - dedup check  (sequential per item; BM25 reads are safe to fan-out)
-         *   - write (add or supersede)
-         *   - async entity extraction (fire-and-forget per item)
-         * Each item is independent; a failure in one does not abort others.
+         * Process items SEQUENTIALLY to avoid concurrent write-transaction conflicts
+         * on both Memgraph and KuzuDB. Parallel sessions from Promise.all can deadlock
+         * when they attempt to MERGE the same User/App nodes simultaneously.
+         * Sequential processing also ensures dedup TOCTOU safety: each item's
+         * near-duplicate check completes before the next item's write begins.
+         *
+         * Tantivy write-conflict prevention: entity extraction from the PREVIOUS item
+         * is awaited (up to EXTRACTION_DRAIN_TIMEOUT_MS) before the next write starts.
+         * This prevents two concurrent write sessions from hitting Memgraph's text-index
+         * writer simultaneously, which causes "Tantivy error: index writer was killed".
+         * runWrite() also retries on transient Tantivy errors as a defense-in-depth.
          */
-        const results = await Promise.all(
-          items.map(async (text) => {
-            try {
-              // Spec 03: Deduplication pre-write hook
-              const dedup = await checkDeduplication(text, userId);
+        const EXTRACTION_DRAIN_TIMEOUT_MS = 3_000;
 
-              if (dedup.action === "skip") {
-                console.log(`[MCP] add_memories dedup skip — duplicate of ${dedup.existingId}`);
-                return { id: dedup.existingId, memory: text, event: "SKIP_DUPLICATE" as const };
-              }
+        type MemoryResult =
+          | { id: string;   memory: string; event: "ADD" | "SUPERSEDE" | "SKIP_DUPLICATE" }
+          | { id: null;     memory: string; event: "ERROR"; error: string };
+        const results: MemoryResult[] = [];
 
-              let id: string;
-              if (dedup.action === "supersede") {
-                console.log(`[MCP] add_memories dedup supersede — superseding ${dedup.existingId}`);
-                id = await supersedeMemory(dedup.existingId, text, userId, clientName);
-              } else {
-                id = await addMemory(text, {
-                  userId,
-                  appName: clientName,
-                  metadata: { source_app: "openmemory", mcp_client: clientName },
-                });
-              }
+        let prevExtractionPromise: Promise<void> | null = null;
 
-              const event = dedup.action === "supersede" ? "SUPERSEDE" : "ADD";
+        for (const text of items) {
+          // Drain previous item's entity extraction before starting the next write,
+          // capped at EXTRACTION_DRAIN_TIMEOUT_MS to avoid blocking the batch indefinitely.
+          if (prevExtractionPromise) {
+            await Promise.race([
+              prevExtractionPromise,
+              new Promise<void>((r) => setTimeout(r, EXTRACTION_DRAIN_TIMEOUT_MS)),
+            ]);
+            prevExtractionPromise = null;
+          }
 
-              // Spec 04: Async entity extraction — fire-and-forget, never blocks
-              processEntityExtraction(id).catch((e) => console.warn("[entity worker]", e));
+          try {
+            // Spec 03: Deduplication pre-write hook
+            const dedup = await checkDeduplication(text, userId);
 
-              return { id, memory: text, event } as { id: string; memory: string; event: "ADD" | "SUPERSEDE" };
-            } catch (itemErr: unknown) {
-              const msg = itemErr instanceof Error ? itemErr.message : String(itemErr);
-              console.error(`[MCP] add_memories item error text.slice(0,80)="${text.slice(0, 80)}" err=${msg}`);
-              return { id: null, memory: text, event: "ERROR" as const, error: msg };
+            if (dedup.action === "skip") {
+              console.log(`[MCP] add_memories dedup skip — duplicate of ${dedup.existingId}`);
+              results.push({ id: dedup.existingId, memory: text, event: "SKIP_DUPLICATE" });
+              continue;
             }
-          })
-        );
+
+            let id: string;
+            if (dedup.action === "supersede") {
+              console.log(`[MCP] add_memories dedup supersede — superseding ${dedup.existingId}`);
+              id = await supersedeMemory(dedup.existingId, text, userId, clientName);
+            } else {
+              id = await addMemory(text, {
+                userId,
+                appName: clientName,
+                metadata: { source_app: "openmemory", mcp_client: clientName },
+              });
+            }
+
+            const event = dedup.action === "supersede" ? "SUPERSEDE" : "ADD";
+
+            // Spec 04: Async entity extraction — tracked so next iteration can drain it
+            prevExtractionPromise = processEntityExtraction(id)
+              .catch((e: unknown) => console.warn("[entity worker]", e));
+
+            results.push({ id, memory: text, event });
+          } catch (itemErr: unknown) {
+            const msg = itemErr instanceof Error ? itemErr.message : String(itemErr);
+            console.error(`[MCP] add_memories item error text.slice(0,80)="${text.slice(0, 80)}" err=${msg}`);
+            results.push({ id: null, memory: text, event: "ERROR", error: msg });
+          }
+        }
+
+        // Drain the last item's entity extraction (fire-and-forget to caller,
+        // but we still want it to finish before the session tears down)
+        if (prevExtractionPromise) {
+          await Promise.race([
+            prevExtractionPromise,
+            new Promise<void>((r) => setTimeout(r, EXTRACTION_DRAIN_TIMEOUT_MS)),
+          ]);
+        }
 
         console.log(`[MCP] add_memories done in ${Date.now() - t0}ms batch=${items.length}`);
 
@@ -361,19 +426,39 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         "e.g. the user changed jobs, moved cities, switched tech stacks, or corrected earlier information.",
       inputSchema: updateMemorySchema,
     },
-    async ({ memory_id, new_text }) => {
+    async ({ memory_id, memory_content, text }) => {
       if (!userId) return { content: [{ type: "text" as const, text: "Error: user_id not provided" }] };
+
+      if (!memory_id && !memory_content) {
+        return { content: [{ type: "text" as const, text: "Error: provide either memory_id or memory_content" }] };
+      }
 
       try {
         const t0 = Date.now();
-        console.log(`[MCP] update_memory start for userId=${userId} memoryId=${memory_id}`);
+
+        // Resolve memory ID — direct when provided, fuzzy-content-match otherwise
+        let resolvedMemoryId = memory_id;
+        if (!resolvedMemoryId) {
+          const found = await runRead<{ id: string }>(
+            `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)
+             WHERE m.invalidAt IS NULL AND toLower(m.content) CONTAINS toLower($fragment)
+             RETURN m.id AS id ORDER BY m.createdAt DESC LIMIT 1`,
+            { userId, fragment: memory_content! },
+          );
+          if (found.length === 0) {
+            return { content: [{ type: "text" as const, text: "Error: No memory found matching the provided content fragment" }] };
+          }
+          resolvedMemoryId = found[0].id;
+        }
+
+        console.log(`[MCP] update_memory start for userId=${userId} memoryId=${resolvedMemoryId}`);
 
         // Verify old memory exists and belongs to user
         const oldRows = await runRead<{ content: string }>(
           `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memoryId})
            WHERE m.invalidAt IS NULL
            RETURN m.content AS content`,
-          { userId, memoryId: memory_id },
+          { userId, memoryId: resolvedMemoryId },
         );
 
         if (oldRows.length === 0) {
@@ -381,9 +466,9 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         }
 
         // Use bi-temporal supersede — old memory preserved with invalidAt, new one linked via [:SUPERSEDES]
-        const newId = await supersedeMemory(memory_id, new_text, userId, clientName);
+        const newId = await supersedeMemory(resolvedMemoryId, text, userId, clientName);
 
-        console.log(`[MCP] update_memory done in ${Date.now() - t0}ms old=${memory_id} new=${newId}`);
+        console.log(`[MCP] update_memory done in ${Date.now() - t0}ms old=${resolvedMemoryId} new=${newId}`);
 
         // Async entity extraction on new version — fire-and-forget
         processEntityExtraction(newId).catch((e) => console.warn("[entity worker]", e));
@@ -393,10 +478,10 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
             type: "text" as const,
             text: JSON.stringify({
               updated: {
-                old_id: memory_id,
+                old_id: resolvedMemoryId,
                 new_id: newId,
                 old_content: oldRows[0].content,
-                new_content: new_text,
+                new_content: text,
               },
               message: "Memory updated — old version preserved in history",
             }, null, 2),
@@ -525,10 +610,29 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         "or concept and you need full context from memory.",
       inputSchema: getMemoryEntitySchema,
     },
-    async ({ entity_id }) => {
+    async ({ entity_id, entity_name }) => {
       if (!userId) return { content: [{ type: "text" as const, text: "Error: user_id not provided" }] };
 
+      if (!entity_id && !entity_name) {
+        return { content: [{ type: "text" as const, text: "Error: provide either entity_id or entity_name" }] };
+      }
+
       try {
+        // Resolve entity ID — direct when provided, name-lookup otherwise
+        let resolvedEntityId = entity_id;
+        if (!resolvedEntityId) {
+          const found = await runRead<{ id: string }>(
+            `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity)
+             WHERE toLower(e.name) = toLower($name)
+             RETURN e.id AS id LIMIT 1`,
+            { userId, name: entity_name! },
+          );
+          if (found.length === 0) {
+            return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Entity not found" }) }] };
+          }
+          resolvedEntityId = found[0].id;
+        }
+
         // Get entity details
         const entityRows = await runRead<{
           id: string; name: string; type: string;
@@ -537,7 +641,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
           `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity {id: $entityId})
            RETURN e.id AS id, e.name AS name, e.type AS type,
                   e.description AS description, e.createdAt AS createdAt`,
-          { userId, entityId: entity_id },
+          { userId, entityId: resolvedEntityId },
         );
 
         if (entityRows.length === 0) {
@@ -554,7 +658,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
            RETURN m.id AS id, m.content AS content, m.createdAt AS createdAt
            ORDER BY m.createdAt DESC
            LIMIT 20`,
-          { userId, entityId: entity_id },
+          { userId, entityId: resolvedEntityId },
         );
 
         // Get connected entities (co-occurrence)
@@ -570,7 +674,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
            RETURN other.id AS id, other.name AS name, other.type AS type, weight
            ORDER BY weight DESC
            LIMIT 10`,
-          { userId, entityId: entity_id },
+          { userId, entityId: resolvedEntityId },
         );
 
         // Get explicit RELATED_TO relationships (both directions)
@@ -590,11 +694,11 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
            RETURN src.name AS sourceName, r.relType AS relType,
                   center.name AS targetName, center.type AS targetType,
                   r.description AS description`,
-          { userId, entityId: entity_id },
+          { userId, entityId: resolvedEntityId },
         );
 
         const entity = entityRows[0];
-        console.log(`[MCP] get_memory_entity id=${entity_id} memories=${memRows.length} connected=${connectedRows.length} relations=${relRows.length}`);
+        console.log(`[MCP] get_memory_entity id=${resolvedEntityId} memories=${memRows.length} connected=${connectedRows.length} relations=${relRows.length}`);
 
         return {
           content: [{
@@ -638,14 +742,20 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
       description: "Natural language entity graph traversal. Finds an entity by name and returns all memories mentioning it, plus its explicit relationships to other entities. Use this to quickly understand everything known about a specific component, person, or concept.",
       inputSchema: getRelatedMemoriesSchema,
     },
-    async ({ entity_name }) => {
+    async ({ entity_name, entity_id: entityIdParam }) => {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
 
-      try {
-        // 1. Resolve the entity by name (using the same logic as entity extraction)
-        const entityId = await resolveEntity({ name: entity_name, type: "OTHER", description: "" }, userId);
+      if (!entity_name && !entityIdParam) {
+        return { content: [{ type: "text", text: "Error: provide entity_name or entity_id" }] };
+      }
 
-        // 1.5 Get entity details
+      try {
+        // Resolve entity: prefer entity_id (direct), fall back to name resolution
+        const entityId = entityIdParam
+          ? entityIdParam
+          : await resolveEntity({ name: entity_name!, type: "OTHER", description: "" }, userId);
+
+        // Get entity details
         const entityRows = await runRead<{
           id: string; name: string; type: string; description: string | null;
         }>(
@@ -653,14 +763,19 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
            RETURN e.id AS id, e.name AS name, e.type AS type, e.description AS description`,
           { userId, entityId }
         );
+
+        if (entityRows.length === 0) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: "Entity not found" }) }] };
+        }
+
         const entity = entityRows[0];
 
-        // 2. Get memories mentioning this entity
+        // Get memories mentioning this entity — correct edge: Memory-[:MENTIONS]->Entity
         const memRows = await runRead<{
           id: string; content: string; createdAt: string;
         }>(
           `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity {id: $entityId})
-           MATCH (m:Memory)-[:HAS_ENTITY]->(e)
+           MATCH (m:Memory)-[:MENTIONS]->(e)
            WHERE m.invalidAt IS NULL
            RETURN m.id AS id, m.content AS content, m.createdAt AS createdAt
            ORDER BY m.createdAt DESC
@@ -943,33 +1058,58 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         "is no longer true (e.g. someone left a company, stopped using a tool, or moved cities).",
       inputSchema: deleteMemoryRelationSchema,
     },
-    async ({ source_entity, relationship_type, target_entity }) => {
+    async ({ relationship_id, source_entity, relationship_type, target_entity }) => {
       if (!userId) return { content: [{ type: "text" as const, text: "Error: user_id not provided" }] };
 
+      // Require either relationship_id OR all three name-based params
+      if (!relationship_id && (!source_entity || !relationship_type || !target_entity)) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: "Error: provide either relationship_id or all of source_entity, relationship_type, and target_entity",
+          }],
+        };
+      }
+
       try {
-        const relType = relationship_type.toUpperCase().replace(/\s+/g, "_");
-        const srcInput = source_entity.trim();
-        const tgtInput = target_entity.trim();
+        let rows: Array<{ count: number; label: string }>;
 
-        const rows = await runWrite<{ count: number }>(
-          `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(src:Entity)
-           WHERE toLower(src.name) = toLower($srcName)
-           MATCH (u)-[:HAS_ENTITY]->(tgt:Entity)
-           WHERE toLower(tgt.name) = toLower($tgtName)
-           MATCH (src)-[r:RELATED_TO {relType: $relType}]->(tgt)
-           DELETE r
-           RETURN count(r) AS count`,
-          { userId, srcName: srcInput, tgtName: tgtInput, relType },
-        );
+        if (relationship_id) {
+          // Fast path: delete by relationship ID (returned by create_memory_relation)
+          rows = await runWrite<{ count: number; label: string }>(
+            `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(src:Entity)-[r:RELATED_TO {id: $relId}]->(tgt:Entity)<-[:HAS_ENTITY]-(u)
+             WITH src.name AS sn, r.relType AS rt, tgt.name AS tn
+             DELETE r
+             RETURN 1 AS count, (sn + ' -[' + rt + ']-> ' + tn) AS label`,
+            { userId, relId: relationship_id },
+          );
+        } else {
+          // Name-based path: match by source / type / target names
+          const relType = relationship_type!.toUpperCase().replace(/\s+/g, "_");
+          const srcInput = source_entity!.trim();
+          const tgtInput = target_entity!.trim();
+          rows = await runWrite<{ count: number; label: string }>(
+            `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(src:Entity)
+             WHERE toLower(src.name) = toLower($srcName)
+             MATCH (u)-[:HAS_ENTITY]->(tgt:Entity)
+             WHERE toLower(tgt.name) = toLower($tgtName)
+             MATCH (src)-[r:RELATED_TO {relType: $relType}]->(tgt)
+             DELETE r
+             RETURN 1 AS count, ($srcName + ' -[' + $relType + ']-> ' + $tgtName) AS label`,
+            { userId, srcName: srcInput, tgtName: tgtInput, relType },
+          );
+        }
 
-        const deleted = rows[0]?.count ?? 0;
-        console.log(`[MCP] delete_memory_relation ${srcInput} -[${relType}]-> ${tgtInput} deleted=${deleted}`);
+        const deleted = rows[0]?.count ?? rows.length;
+        const label = rows[0]?.label
+          ?? (relationship_id ? relationship_id : `${source_entity} -[${relationship_type}]-> ${target_entity}`);
+        console.log(`[MCP] delete_memory_relation ${label} deleted=${deleted}`);
 
         return {
           content: [{
             type: "text" as const,
             text: deleted > 0
-              ? `Successfully removed relationship ${srcInput} -[${relType}]-> ${tgtInput}`
+              ? `Successfully removed relationship ${label}`
               : "No matching relationship found to remove",
           }],
         };
@@ -993,10 +1133,29 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         "a specific person, concept, or organization.",
       inputSchema: deleteMemoryEntitySchema,
     },
-    async ({ entity_id }) => {
+    async ({ entity_id, entity_name }) => {
       if (!userId) return { content: [{ type: "text" as const, text: "Error: user_id not provided" }] };
 
+      if (!entity_id && !entity_name) {
+        return { content: [{ type: "text" as const, text: "Error: provide either entity_id or entity_name" }] };
+      }
+
       try {
+        // Resolve entity ID — direct when provided, name-lookup otherwise
+        let resolvedEntityId = entity_id;
+        if (!resolvedEntityId) {
+          const found = await runRead<{ id: string }>(
+            `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity)
+             WHERE toLower(e.name) = toLower($name)
+             RETURN e.id AS id LIMIT 1`,
+            { userId, name: entity_name! },
+          );
+          if (found.length === 0) {
+            return { content: [{ type: "text" as const, text: "Error: Entity not found" }] };
+          }
+          resolvedEntityId = found[0].id;
+        }
+
         // Count relationships that will be lost before deleting
         const countRows = await runRead<{
           name: string; mentionCount: number; relationCount: number;
@@ -1007,7 +1166,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
            OPTIONAL MATCH (e)-[rel:RELATED_TO]-()
            RETURN e.name AS name, mentionCount,
                   count(rel) AS relationCount`,
-          { userId, entityId: entity_id },
+          { userId, entityId: resolvedEntityId },
         );
 
         if (countRows.length === 0 || countRows[0].name == null) {
@@ -1020,10 +1179,10 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         await runWrite(
           `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity {id: $entityId})
            DETACH DELETE e`,
-          { userId, entityId: entity_id },
+          { userId, entityId: resolvedEntityId },
         );
 
-        console.log(`[MCP] delete_memory_entity id=${entity_id} name=${name} mentions=${mentionCount} relations=${relationCount}`);
+        console.log(`[MCP] delete_memory_entity id=${resolvedEntityId} name=${name} mentions=${mentionCount} relations=${relationCount}`);
 
         return {
           content: [{

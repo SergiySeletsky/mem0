@@ -86,7 +86,7 @@ export async function addMemory(
     { userId, now }
   );
 
-  // Create Memory node with embedding + bi-temporal properties (Spec 01)
+  // Create Memory node + HAS_MEMORY edge in a single session
   await runWrite(
     `MATCH (u:User {userId: $userId}) WITH u LIMIT 1
      CREATE (m:Memory {
@@ -101,6 +101,10 @@ export async function addMemory(
        updatedAt: $now
      })
      CREATE (u)-[:HAS_MEMORY]->(m)
+     ${appName ? `WITH u, m
+     MERGE (u)-[:HAS_APP]->(a:App {appName: $appName})
+     ON CREATE SET a.id = $appId, a.createdAt = $now, a.isActive = true
+     MERGE (m)-[:CREATED_BY]->(a)` : ""}
      RETURN m.id AS id`,
     {
       userId,
@@ -109,21 +113,9 @@ export async function addMemory(
       embedding,
       metadata: metadata ? JSON.stringify(metadata) : "{}",
       now,
+      ...(appName ? { appName, appId: randomUUID() } : {}),
     }
   );
-
-  // Optionally attach to App node
-  if (appName) {
-    await runWrite(
-      `MATCH (u:User {userId: $userId})
-       MERGE (u)-[:HAS_APP]->(a:App {appName: $appName})
-       ON CREATE SET a.id = $appId, a.createdAt = $now, a.isActive = true
-       WITH a
-       MATCH (m:Memory {id: $memId})
-       MERGE (m)-[:CREATED_BY]->(a)`,
-      { userId, appName, appId: randomUUID(), memId: id, now }
-    );
-  }
 
   // Async categorization — fire-and-forget, never blocks response
   categorizeMemory(id, text).catch((e) => console.warn("[categorize]", e));
@@ -168,6 +160,11 @@ export async function updateMemory(
  * Temporal update: invalidate the old Memory node and create a new one that
  * supersedes it.  Creates a (new)-[:SUPERSEDES {at}]->(old) edge.
  *
+ * Consolidated from 4 runWrite calls to 2 to reduce Memgraph write pressure
+ * and Tantivy text-index writer contention:
+ *   Call 1: Invalidate old + create new + HAS_MEMORY edge + SUPERSEDES edge (atomic)
+ *   Call 2: Attach new Memory to App (optional, only when appName provided)
+ *
  * Returns the id of the newly created Memory node.
  */
 export async function supersedeMemory(
@@ -180,16 +177,13 @@ export async function supersedeMemory(
   const newId = randomUUID();
   const embedding = await embed(newContent);
 
-  // Step 1: Invalidate old memory (set invalidAt)
+  // Steps 1-3 combined: invalidate old, create new, link to user, create SUPERSEDES edge.
+  // Anchored to User (Spec 09 — namespace isolation): both old and new Memory
+  // nodes are reached through the User graph path, preventing cross-user access.
   await runWrite(
     `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(old:Memory {id: $oldId})
-     SET old.invalidAt = $now, old.updatedAt = $now`,
-    { userId, oldId, now }
-  );
-
-  // Step 2: Create new Memory node with temporal properties
-  await runWrite(
-    `MATCH (u:User {userId: $userId}) WITH u LIMIT 1
+     SET old.invalidAt = $now, old.updatedAt = $now
+     WITH u, old
      CREATE (new:Memory {
        id: $newId,
        content: $newContent,
@@ -202,26 +196,17 @@ export async function supersedeMemory(
        updatedAt: $now
      })
      CREATE (u)-[:HAS_MEMORY]->(new)
+     CREATE (new)-[:SUPERSEDES {at: $now}]->(old)
      RETURN new.id AS id`,
-    { userId, newId, newContent, embedding, now }
+    { userId, oldId, newId, newContent, embedding, now }
   );
 
-  // Step 3: Create [:SUPERSEDES] edge: new -> old
-  await runWrite(
-    `MATCH (new:Memory {id: $newId})
-     MATCH (old:Memory {id: $oldId})
-     CREATE (new)-[:SUPERSEDES {at: $now}]->(old)`,
-    { newId, oldId, now }
-  );
-
-  // Step 4: Attach new Memory to App if provided
+  // Step 4: Attach new Memory to App if provided (optional, separate session)
   if (appName) {
     await runWrite(
-      `MATCH (u:User {userId: $userId})
+      `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $newId})
        MERGE (u)-[:HAS_APP]->(a:App {appName: $appName})
        ON CREATE SET a.id = $appId, a.createdAt = $now, a.isActive = true
-       WITH a
-       MATCH (m:Memory {id: $newId})
        MERGE (m)-[:CREATED_BY]->(a)`,
       { userId, appName, appId: randomUUID(), newId, now }
     );

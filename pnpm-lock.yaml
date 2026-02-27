@@ -213,9 +213,6 @@ importers:
       embla-carousel-react:
         specifier: 8.5.1
         version: 8.5.1(react@19.2.4)
-      fastembed:
-        specifier: ^2.1.0
-        version: 2.1.0
       input-otp:
         specifier: 1.4.1
         version: 1.4.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -331,28 +328,6 @@ packages:
 
   '@anthropic-ai/sdk@0.40.1':
     resolution: {integrity: sha512-DJMWm8lTEM9Lk/MSFL+V+ugF7jKOn0M2Ujvb5fN8r2nY14aHbGPZ1k6sgjL+tpJ3VuOGJNG+4R83jEpOuYPv8w==}
-
-  '@anush008/tokenizers-darwin-universal@0.0.0':
-    resolution: {integrity: sha512-SACpWEooTjFX89dFKRVUhivMxxcZRtA3nJGVepdLyrwTkQ1TZQ8581B5JoXp0TcTMHfgnDaagifvVoBiFEdNCQ==}
-    engines: {node: '>= 10'}
-    os: [darwin]
-
-  '@anush008/tokenizers-linux-x64-gnu@0.0.0':
-    resolution: {integrity: sha512-TLjByOPWUEq51L3EJkS+slyH57HKJ7lAz/aBtEt7TIPq4QsE2owOPGovByOLIq1x5Wgh9b+a4q2JasrEFSDDhg==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-    libc: [glibc]
-
-  '@anush008/tokenizers-win32-x64-msvc@0.0.0':
-    resolution: {integrity: sha512-/5kP0G96+Cr6947F0ZetXnmL31YCaN15dbNbh2NHg7TXXRwfqk95+JtPP5Q7v4jbR2xxAmuseBqB4H/V7zKWuw==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [win32]
-
-  '@anush008/tokenizers@0.0.0':
-    resolution: {integrity: sha512-IQD9wkVReKAhsEAbDjh/0KrBGTEXelqZLpOBRDaIRvlzZ9sjmUP+gKbpvzyJnei2JHQiE8JAgj7YcNloINbGBw==}
-    engines: {node: '>= 10'}
 
   '@babel/code-frame@7.29.0':
     resolution: {integrity: sha512-9NhCeYjq9+3uxgdtp20LSiJXJvN0FeCtNGpJxuMFZ1Kv3cWUNb6DOhJwUvcVCzKGR66cw4njwM6hrJLqgOwbcw==}
@@ -762,17 +737,9 @@ packages:
     peerDependencies:
       react-hook-form: ^7.0.0
 
-  '@huggingface/hub@2.10.3':
-    resolution: {integrity: sha512-qSk4FcVFdTGx0lNpFyy7p2KwgAPCsjM2+tupG/MGToEvUGVLsy+dCmela1BcU/VvJNweCtnH5HwdNr7IQa4Zzw==}
-    engines: {node: '>=18'}
-    hasBin: true
-
   '@huggingface/jinja@0.5.5':
     resolution: {integrity: sha512-xRlzazC+QZwr6z4ixEqYHo9fgwhTZ3xNSdljlKfUFGZSdlvt166DljRELFUfFytlYOYvo3vTisA/AFOuOAzFQQ==}
     engines: {node: '>=18'}
-
-  '@huggingface/tasks@0.19.85':
-    resolution: {integrity: sha512-4s5+GV257GRmT7Hrt190KlGsuq53IwFtCBj+J+bvoeIpn119589wY7WY/LS5VJMLwu7pUQnouLmMKeEOKO4BSQ==}
 
   '@huggingface/transformers@3.8.1':
     resolution: {integrity: sha512-tsTk4zVjImqdqjS8/AOZg2yNLd1z9S5v+7oUPpXaasDRwEDhB+xnglK1k5cad26lL5/ZIaeREgWWy0bs9y9pPA==}
@@ -2696,10 +2663,6 @@ packages:
   class-variance-authority@0.7.1:
     resolution: {integrity: sha512-Ka+9Trutv7G8M6WT6SeiRWz792K5qEqIGEGzXKhAE6xOWAY6pPH8U+9IY3oCMv6kqTmLsv7Xh/2w2RigkePMsg==}
 
-  cli-progress@3.12.0:
-    resolution: {integrity: sha512-tRkV3HJ1ASwm19THiiLIXLO7Im7wlTuKnvkYaTkyoAPefqjNg7W7DHKUlGRxy9vxDvbyCYQkQozvptuMkGCg8A==}
-    engines: {node: '>=4'}
-
   client-only@0.0.1:
     resolution: {integrity: sha512-IV3Ou0jSMzZrd3pZ48nLkT9DA7Ag1pnPzaiQhpW7c3RbcqqzvzzVu+L8gfqMp/8IM2MQtSiqaCxrrcfu8I8rMA==}
 
@@ -3165,9 +3128,6 @@ packages:
 
   fast-uri@3.1.0:
     resolution: {integrity: sha512-iPeeDKJSWf4IEOasVVrknXpaBV0IApz/gp7S2bb7Z4Lljbl2MGJRqInZiUrQwV16cpzw/D3S5j5Julj/gT52AA==}
-
-  fastembed@2.1.0:
-    resolution: {integrity: sha512-oQkpcRHBppJ3+a3w9dU0uytSY0N1cnEa/iVMc8AXEd+tvT529GekOEFhNviJy89R3lvQXF6cdIMTXHj1Gi00xQ==}
 
   fastq@1.20.1:
     resolution: {integrity: sha512-GGToxJ/w1x32s/D2EKND7kTil4n8OVk/9mycTc4VDza13lOvpUZTGX3mFSCtV9ksdGBVzvsyAVLM6mHFThxXxw==}
@@ -4399,10 +4359,6 @@ packages:
   process-nextick-args@2.0.1:
     resolution: {integrity: sha512-3ouUOpQhtgrbOa17J7+uxOTpITYWaGP7/AhoR3+A+/1e9skrzelGi/dXzEYyvbxubEF6Wn2ypscTKiKJFFn1ag==}
 
-  progress@2.0.3:
-    resolution: {integrity: sha512-7PiHtLll5LdnKIMw100I+8xJXR5gW2QwWYkT6iJva0bXitZKa/XMrSbdmg3r2Xnaidz9Qumd0VPaMrZlF9V9sA==}
-    engines: {node: '>=0.4.0'}
-
   prompts@2.4.2:
     resolution: {integrity: sha512-NxNv/kLguCA7p3jE8oL2aEBsrJWgAakBpgmgK6lpPWV+WuOmY6r2/zbAVnP+T8bQlA0nzHXSJSJW0Hq7ylaD2Q==}
     engines: {node: '>= 6'}
@@ -5286,21 +5242,6 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
-  '@anush008/tokenizers-darwin-universal@0.0.0':
-    optional: true
-
-  '@anush008/tokenizers-linux-x64-gnu@0.0.0':
-    optional: true
-
-  '@anush008/tokenizers-win32-x64-msvc@0.0.0':
-    optional: true
-
-  '@anush008/tokenizers@0.0.0':
-    optionalDependencies:
-      '@anush008/tokenizers-darwin-universal': 0.0.0
-      '@anush008/tokenizers-linux-x64-gnu': 0.0.0
-      '@anush008/tokenizers-win32-x64-msvc': 0.0.0
-
   '@babel/code-frame@7.29.0':
     dependencies:
       '@babel/helper-validator-identifier': 7.28.5
@@ -5665,15 +5606,7 @@ snapshots:
     dependencies:
       react-hook-form: 7.71.1(react@19.2.4)
 
-  '@huggingface/hub@2.10.3':
-    dependencies:
-      '@huggingface/tasks': 0.19.85
-    optionalDependencies:
-      cli-progress: 3.12.0
-
   '@huggingface/jinja@0.5.5': {}
-
-  '@huggingface/tasks@0.19.85': {}
 
   '@huggingface/transformers@3.8.1':
     dependencies:
@@ -7666,11 +7599,6 @@ snapshots:
     dependencies:
       clsx: 2.1.1
 
-  cli-progress@3.12.0:
-    dependencies:
-      string-width: 4.2.3
-    optional: true
-
   client-only@0.0.1: {}
 
   cliui@8.0.1:
@@ -8166,14 +8094,6 @@ snapshots:
   fast-levenshtein@2.0.6: {}
 
   fast-uri@3.1.0: {}
-
-  fastembed@2.1.0:
-    dependencies:
-      '@anush008/tokenizers': 0.0.0
-      '@huggingface/hub': 2.10.3
-      onnxruntime-node: 1.21.0
-      progress: 2.0.3
-      tar: 6.2.1
 
   fastq@1.20.1:
     dependencies:
@@ -9589,8 +9509,6 @@ snapshots:
       react-is: 18.3.1
 
   process-nextick-args@2.0.1: {}
-
-  progress@2.0.3: {}
 
   prompts@2.4.2:
     dependencies:

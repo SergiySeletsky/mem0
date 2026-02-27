@@ -1821,3 +1821,286 @@ Run ESLint and TypeScript static analysis across monorepo. Fix all identified er
 - **Neo4j Integer**: Use `(raw as { low?: number })?.low ?? 0` instead of `(raw as any)?.low`
 - **`Record<string, any>` vs `Record<string, unknown>`**: Prefer `unknown` for internal types; keep `any` only for SDK public APIs and library interop where `unknown` causes cascading errors
 - **`string | any`**: This is a bug — collapses to `any`. Always just use `string`
+## Session 9 — Agentic Repo Audit with OpenMemory MCP as LTM (2026-02-26)
+
+### Objective
+Test all 10 OpenMemory MCP tools in a realistic scenario: agentic architect performing a large-repo audit that doesn't fit in a single LLM context window. OpenMemory serves as the long-term memory layer.
+
+### Audit Scope
+- mem0 monorepo (pnpm workspace: mem0-ts + openmemory/ui)
+- ~100+ source files, 30 API routes, 49 test files, 33 lib modules
+
+### Memories Stored: 12
+Covering: monorepo structure, dependency inventory, dev environment, mem0-ts SDK (55 files, 14 LLMs, 7 embedders), test coverage gaps (62% overall), dead config, openmemory/ui architecture (30 routes, 33 lib files), test pyramid (49 files), potential problems (6 issues), DB security posture, MCP server analysis, hybrid search stack.
+
+### Entities Auto-Extracted: 30+
+Examples: openmemory/ui (PRODUCT), mem0-ts (PRODUCT), Factory pattern (PATTERN), Kuzu (PRODUCT), MemoryClient (PRODUCT), Next.js middleware.ts (CONFIGURATION), embedding providers (CONCEPT)
+
+### MCP Tool Ratings
+
+| Tool | Rating | Verdict |
+|------|--------|---------|
+| `add_memories` | ★★★★★ | Essential — but batch >2 items fails with Memgraph transaction conflicts |
+| `search_memory` | ★★★★★ | Excellent hybrid search (0.90-0.99 relevance) — but query is required (no browse mode) |
+| `search_memory_entities` | ★★★★☆ | Smart entity typing — descriptions could synthesize across linked memories |
+| `get_memory_entity` | ★★★★☆ | Full entity profiles with connected entities — solid |
+| `get_memory_map` | ★★★★☆ | Knowledge graph subgraph — CO_OCCURS_WITH edges are noisy |
+| `update_memory` | ★★★★★ | Bi-temporal versioning works correctly |
+| `create_memory_relation` | ★★★★☆ | Explicit relationship creation — works well |
+| `delete_memory_relation` | ★★★☆☆ | Over-parameterized: requires 4 params when ID alone should suffice |
+| `delete_memory_entity` | ★★★★☆ | Clean cascade deletion with informative response |
+| `get_related_memories` | ★★☆☆☆ | Returns empty results for entities that have memories in get_memory_entity |
+
+### Bugs Found
+
+1. **Batch add_memories transaction conflicts** — Promise.all creates parallel Memgraph sessions that conflict. 2 of 3 memories failed, 1 of those was actually stored despite ERROR response.
+2. **get_related_memories inconsistent with get_memory_entity** — Different Cypher paths (HAS_ENTITY vs MENTIONS) return different results for the same entity.
+3. **search_memory query required in schema** — Server code supports browse mode (no query) but MCP Zod schema makes query mandatory.
+4. **Ghost success on add_memories** — Memory stored despite ERROR response; subsequent add returned SKIP_DUPLICATE confirming silent success.
+
+### Missing MCP Tools
+- `delete_memory` (exists as API route, not exposed)
+- `list_memories` (browse without search)
+- `backup/export` + `backup/import`
+- `get_stats`
+- `archive/pause_memory`
+- `get_access_log`
+
+### Parameter Naming Inconsistencies
+- `text` (add) vs `new_text` (update) vs `content` (DB) vs `memory` (response)
+- `entity_id` (get_memory_map, get_memory_entity, delete) vs `entity_name` (get_related_memories)
+- `delete_memory_relation` requires both `relationship_id` AND `source_entity`+`target_entity`+`relationship_type`
+
+### Patterns
+- **Always send 1 memory per add_memories call** — batch writes cause transaction conflicts
+- **get_related_memories and get_memory_entity use different edge traversal** — results are inconsistent
+- **Entity descriptions derived from single memory** — can be misleading; should synthesize
+- **CO_OCCURS_WITH auto-edges create dense cliques** — noisy for graph navigation
+## Session 10 � MCP Bug Fixes: Implementation and Test Repair
+
+### Objective
+Apply all 5 bug fixes identified in Session 9 audit to lib/mcp/server.ts, verify with TypeScript and full test suite.
+
+### Changes Made
+
+#### lib/mcp/server.ts
+1. **Fix 1 - Serial batch writes**: Replaced Promise.all(items.map(...)) with sequential for...of loop using typed MemoryResult[] array. Prevents Memgraph/KuzuDB concurrent write-transaction conflicts.
+2. **Fix 2 - get_related_memories edge bug**: [:HAS_ENTITY] changed to [:MENTIONS] in Memory-Entity Cypher. Added entity-not-found guard and optional entity_id fast-path (skips resolveEntity call).
+3. **Fix 3 - update_memory param rename**: new_text renamed to text. Handler destructuring, supersedeMemory() call, and response new_content field all updated.
+4. **Fix 5 - get_related_memories entity_id**: Schema now accepts optional entity_name OR optional entity_id. Handler resolves via ID directly when available.
+5. **Fix 6 - delete_memory_relation relationship_id**: Added optional relationship_id fast path using MATCH-WITH-DELETE (captures r.relType via WITH before DELETE for Memgraph safety). Name-based path retained as fallback. Count check uses rows[0]?.count ?? rows.length.
+
+#### tests/unit/mcp/tools.test.ts
+- Updated MCP_UPD_01, MCP_UPD_02, MCP_UPD_03 to use text instead of new_text.
+
+### Root Cause: ENT_01/02 Chain Failure
+jest.clearAllMocks() clears call records but NOT queued mockResolvedValueOnce values. update_memory tests used invalid new_text param, MCP validation rejected calls before handlers ran, leaving 3 unconsumed runRead mocks that bled into get_memory_entity describe block causing wrong entity row data. Fix: tests use text so handlers run and consume their mocks.
+
+### Verification
+- tsc --noEmit: 0 errors
+- pnpm test --testPathPattern=mcp --runInBand: 50/50 passed (unit + e2e)
+---
+
+## Session 11 — Full Repo Audit via OpenMemory MCP (Long-Term Memory Stress Test)
+
+### Objective
+Use all 10 OpenMemory MCP tools as an agentic architect performing a large-scale repo audit. Generate real architectural findings that don't fit in a single LLM context window, store them in OpenMemory as long-term memory, and produce a final report on MCP tool usefulness.
+
+### Infrastructure Notes
+- **Memgraph crashed 3× during the session** (Rust panic in destructor, Tantivy index writer thread errors). Required `docker-compose down` + `up` each time. This is a significant stability issue for the MCP server's reliability as an LTM backend.
+- **Dev server running OLD code** (Finding #0): The Next.js dev server on port 3001 did NOT hot-reload Session 10's fixes or the previous turn's name-fallback additions. All MCP tool schemas still showed old signatures (`new_text` not `text`, `entity_id` required not optional, `query` required in search, `get_memory_map` requires `entity_id`). The fixes exist on disk but the server was serving stale code.
+
+### MCP Tool Usage Report
+
+#### Call Counts
+
+| Tool | Calls | Successes | Failures | Failure Reasons |
+|------|------:|----------:|---------:|-----------------|
+| `add_memories` | 7 | 5 | 2 | Memgraph crash, Tantivy index writer error |
+| `search_memory` | 3 | 2 | 1 | Browse mode (no query) rejected by old server |
+| `search_memory_entities` | 2 | 2 | 0 | — |
+| `create_memory_relation` | 5 | 4 | 1 | Memgraph crash |
+| `get_memory_entity` | 1 | 1 | 0 | — |
+| `get_memory_map` | 2 | 1 | 1 | Missing required `entity_id` (old server) |
+| `get_related_memories` | 2 | 1 | 1 | Missing required `entity_name` (param confusion) |
+| `update_memory` | 1 | 1 | 0 | Used old `new_text` param name |
+| `delete_memory_relation` | 1 | 1 | 0 | — |
+| `delete_memory_entity` | 0 | — | — | Not exercised (no orphan entities found) |
+| **TOTAL** | **24** | **18** | **6** | **75% success rate** |
+
+#### Per-Tool Usefulness Rating
+
+| Tool | Rating | Notes |
+|------|--------|-------|
+| `add_memories` | ★★★★★ | **Most useful tool.** Batch ingestion of findings, automatic dedup (SKIP_DUPLICATE detected correctly), auto-categorization, entity extraction. Essential for the audit workflow. |
+| `search_memory` | ★★★★★ | **Excellent retrieval.** Hybrid BM25+vector with RRF scores. Returns text_rank + vector_rank for debugging. 10 results per query with relevance_score. Would be ★★★★★+ if browse mode worked (query-less listing). |
+| `search_memory_entities` | ★★★★☆ | Good for entity discovery. Returned rich entity metadata (type, description, memoryCount). Would benefit from filtering by entity type. |
+| `get_memory_entity` | ★★★★★ | **Best single-call data density.** Returns entity + all linked memories + connectedEntities (with weights) + relationships in one call. Perfect for exploring knowledge graph context. |
+| `get_memory_map` | ★★★★☆ | 20KB knowledge graph response with multi-hop traversal. Useful for understanding entity clusters. Painful that old server requires `entity_id` — should work without it for global graph view. |
+| `create_memory_relation` | ★★★★☆ | Clean API. Successfully created typed relationships (PUBLISHED_AS, DEPENDS_ON, HAS_ISSUE). Would benefit from optional `description` parameter. |
+| `get_related_memories` | ★★★☆☆ | Returned entity + relationships correctly, but **memories array was always empty** due to the `[:HAS_ENTITY]` bug on the running server. Degraded usefulness. With the fix (`[:MENTIONS]`), would be ★★★★☆. |
+| `update_memory` | ★★★★★ | Correct bi-temporal SUPERSEDE behavior — preserves old version, creates new ID. Response includes both old and new content for verification. |
+| `delete_memory_relation` | ★★★★☆ | Works cleanly. Name-based triple (source+type+target) is more ergonomic than requiring relationship_id. |
+| `delete_memory_entity` | N/A | Not tested this session. |
+
+#### MCP Design Improvement Recommendations
+
+**P0 — Reliability**
+1. **Memgraph connection resilience**: `runRead`/`runWrite` need retry logic (exponential backoff, 3 attempts). 3 crashes in one session is unacceptable for an LTM backend. The `add_memories` batch writes exacerbate this — 6 concurrent writes can trigger Memgraph transaction conflicts.
+2. **Hot-reload detection**: The dev server should detect code changes to `lib/mcp/server.ts` and restart the MCP transport. Currently, tool schemas are cached at first connection and never refreshed.
+
+**P1 — Ergonomics**
+3. **Browse mode for `search_memory`**: Allow empty/missing `query` to list recent memories (paginated). Critical for agents exploring what's stored without a specific search term.
+4. **`get_memory_map` without `entity_id`**: Should return the global knowledge graph when no entity is specified. Currently rejects the call.
+5. **Batch result reporting**: `add_memories` should return per-item status (success/fail/dedup) even when some items fail. Currently, a mid-batch Memgraph error loses all results — partial success should be reported.
+6. **`get_related_memories` consistency**: Fix the `[:MENTIONS]` edge type (already on disk, needs server reload). This tool is the primary way agents traverse entity→memory relationships.
+
+**P2 — Agent UX**
+7. **Unified ID-or-name resolution**: The Session 10.5 fixes added `entity_name` fallback to `get_memory_entity` and `delete_memory_entity`, and `memory_content` fallback to `update_memory`. This pattern should be applied consistently to ALL tools that accept IDs.
+8. **Tool descriptions for LLM discovery**: Tool descriptions should explicitly mention what the tool returns (e.g., "Returns entity + linked memories + connected entities + relationships"). Agents choose tools based on descriptions.
+9. **Confidence scoring in `search_memory`**: Already present (`confident: true/false`), but threshold is unclear. Document what triggers `confident: false`.
+10. **`create_memory_relation` description field**: Allow an optional `description` parameter to annotate relationships with context (e.g., "version conflict discovered during audit").
+
+### Architectural Findings Summary (Stored in OpenMemory)
+
+**Total findings stored: ~25 memories across 6 audit phases**
+
+#### Critical (P0)
+- Entity resolution N+1: 18-35 sequential DB round-trips per memory write
+- `supersedeMemory()` Spec 09 violation: bare `MATCH Memory` without User anchor
+- No TypeScript CI pipeline for openmemory/ui or mem0-ts
+- `runRead`/`runWrite` has no retry logic for Bolt failures
+
+#### High (P1)
+- `addMemory()` doesn't integrate dedup or entity extraction (route-handler responsibility)
+- Serial writes in `addMemory()` (3 sessions) and `supersedeMemory()` (4 sessions)
+- `updateMemory()` bypasses bi-temporal model (in-place SET destroys history)
+- No auth middleware (user_id is trust-based)
+- Build config masks type/lint errors (`ignoreBuildErrors: true`)
+- N+1 query in GET /api/v1/memories (categories fetched per-memory)
+
+#### Medium (P2)
+- 3 Zod versions coexist (3.24.1, 4.3.6, 3.25.76)
+- openai SDK version split (v4 vs v6)
+- Module singleton not `globalThis`-guarded (HMR driver leaks)
+- Dedup cache uses FIFO not LRU
+- intelli-embed-v3 pipeline init race condition
+- README.md completely outdated
+- `lib/ai/client.ts` hardcoded Azure-only despite docs saying it auto-selects
+- 237 `no-explicit-any` lint warnings
+
+#### Low (P3)
+- Package name "my-v0-project" leftover
+- Dead tsup config in mem0-ts package.json
+- Dead `requireUserId()` middleware never imported
+- `searchMemories()` duplicates `vectorSearch()` (legacy function)
+- mem0ai workspace dependency declared but never imported
+
+### Entity Graph State
+Entities created/discovered by audit: mem0-ts, openmemory/ui, mem0ai, Memgraph, zod, openai-sdk, npm:mem0ai, god-file-1122-lines, and ~30 more auto-extracted entities.
+
+Relationships: mem0-ts →[PUBLISHED_AS]→ npm:mem0ai, openmemory-ui →[DEPENDS_ON]→ openai-sdk, mem0-ts →[HAS_ISSUE]→ god-file-1122-lines, openmemory-ui →[HAS_ISSUE]→ N+1-query-memories-route.
+
+### Was OpenMemory MCP Useful as Long-Term Memory?
+
+**YES — with caveats.**
+
+**What worked well:**
+- Storing 25+ detailed findings across a multi-hour audit that would overflow any context window
+- Retrieving specific findings via hybrid search with high precision (relevance scores 0.87–1.0)
+- Entity extraction automatically built a knowledge graph of the codebase components
+- Dedup correctly caught near-duplicate findings (SKIP_DUPLICATE)
+- SUPERSEDE preserved history when updating findings
+- `get_memory_entity` provided rich context with a single call
+
+**What was painful:**
+- Memgraph instability (3 crashes) caused data loss on in-flight writes — no partial success reporting
+- Old server code running meant 25% of tool calls hit known bugs that are already fixed on disk
+- `get_related_memories` was useless due to the `[:HAS_ENTITY]` bug (empty memories array)
+- Browse mode missing — couldn't list all stored memories without a search query
+- No way to get a "session summary" — had to manually track what was stored vs what was lost to crashes
+
+**Verdict:** OpenMemory MCP is **viable** as an agent LTM solution for large repo audits. The core read/write/search loop works well. The main barriers are infrastructure reliability (Memgraph crashes) and the 3 tool bugs (all already fixed on disk). After those fixes are deployed, this would be a 4/5 star experience.
+
+### Patterns (for AGENTS.md)
+- **Memgraph Tantivy crashes**: Rapid batch writes (especially `add_memories` with 5+ items containing long text) can trigger Tantivy index writer panics. Mitigation: reduce batch sizes, add write delays between batches.
+- **Transaction conflicts after restart**: Memgraph needs 10-15 seconds after restart before accepting writes. The MCP server should implement connection health checks with backoff.
+- **Entity auto-extraction quality**: Extracted entities are sometimes too granular (e.g., "graph_stores/memgraph.ts" as an entity). The extraction prompt could benefit from a minimum significance threshold.
+
+---
+
+## Session 12 — Reliability Hardening (Tantivy + Connection Errors)
+
+### Objective
+Investigate and fix the "Connection was closed by server" and "Tantivy error: An index writer was killed" errors observed during MCP tool calls, fix all other audit findings, and cover all fixes with tests.
+
+### Root Causes Identified
+1. **Tantivy "index writer killed"**: Fire-and-forget `processEntityExtraction` from item N still running when item N+1's `addMemory()` writes to Memgraph → concurrent text-index writes → Tantivy worker thread panics.
+2. **"Connection was closed by server"**: No retry logic in `runRead`/`runWrite`. Transient Bolt TCP errors propagated directly to callers.
+3. **Driver singleton not `globalThis`-guarded**: Next.js HMR recreated module → old driver leaked without close → connection pool exhaustion.
+4. **Non-atomic writes**: Multiple runWrite calls per operation created orphan nodes and Bolt session churn.
+
+### Fixes Implemented
+
+#### Fix 1 — `lib/db/memgraph.ts` (connection layer)
+- `getDriver()` now uses `globalThis.__memgraphDriver` — persists across HMR module reloads.
+- Added pool config: `maxConnectionPoolSize: 25`, `connectionAcquisitionTimeout: 10_000`.
+- Added `isTransientError()` (exported) — matches: "Connection was closed by server", "Tantivy error", "index writer was killed", "ServiceUnavailable", "ECONNREFUSED", "ECONNRESET", etc.
+- Added `withRetry<T>(fn, maxAttempts=3, baseDelayMs=300)` (exported) — exponential backoff; invalidates driver on connection errors; resets `_vectorIndexVerified`.
+- `runRead` and `runWrite` now wrapped with `withRetry()`.
+
+#### Fix 2 — `lib/memory/write.ts` (write pipeline atomicity)
+- `addMemory()`: User MERGE + Memory CREATE + App attachment consolidated. App is conditionally inlined in the CREATE query — 2 runWrite calls (User MERGE + atomic Create) regardless of appName.
+- `supersedeMemory()`: 4 → 2 runWrite calls. Steps 1-3 (invalidate old + create new + HAS_MEMORY + SUPERSEDES) combined into one atomic User-anchored query. Fixes Spec 09 namespace isolation violation (old code used bare `MATCH (old/new:Memory {id})` without User anchor).
+
+#### Fix 3 — `lib/mcp/server.ts` (Tantivy concurrency prevention)
+- `add_memories` handler: added `prevExtractionPromise` tracking between batch items.
+- Added `EXTRACTION_DRAIN_TIMEOUT_MS = 3_000`.
+- Before each item: `await Promise.race([prevExtractionPromise, timeout(3000)])` — drains previous item's entity extraction before starting next write. Prevents concurrent Tantivy writers.
+
+#### Fix 4 — `lib/entities/resolve.ts` (atomicity + read/write correctness)
+- Step 2 (normalizedName lookup) changed from `runWrite` to `runRead` — was unnecessarily consuming write sessions for a read-only query.
+- Entity creation: replaced non-atomic two-step (CREATE Entity → separate MERGE HAS_ENTITY) with single atomic User-anchored query: `MATCH (u:User {userId}) CREATE (e:Entity {...}) CREATE (u)-[:HAS_ENTITY]->(e)`. Eliminates orphan Entity node risk.
+
+#### Fix 5 — API route error handling
+- `/api/v1/stats/route.ts`: Added try/catch wrapping entire handler. Returns 500 on DB error.
+- `/api/v1/memories/filter/route.ts`: Added try/catch + proper TypeScript `FilterBody` interface + JSON parse error handling. Returns 400 on invalid JSON, 500 on DB errors.
+- `/api/v1/config/route.ts`: Added try/catch to GET, PUT, PATCH handlers. Returns 500 on error.
+
+### Tests Added / Updated
+
+#### `tests/unit/memgraph.test.ts` — new tests
+- `MG_RETRY_01`: runWrite retries on "Connection was closed by server"
+- `MG_RETRY_02`: runWrite retries on "Tantivy error: index writer was killed"
+- `MG_RETRY_03`: runRead retries on "ServiceUnavailable"
+- `MG_RETRY_04`: non-transient errors (SyntaxError) are NOT retried
+- `MG_RETRY_05`: after 3 transient failures error is propagated
+- `MG_RETRY_06`: driver is invalidated (globalThis cleared) on connection error
+- `MG_DRV_01`: getDriver() stores on globalThis, survives module cache invalidation
+- Updated `MG_11`: clears globalThis before testing no-op behavior
+
+#### `tests/unit/memory/write.test.ts` — updated tests
+- `WR_06`: updated for inline App in CREATE (2 total calls, not 3)
+- `WR_30`: updated for atomic supersedeMemory (1 call with all steps, not 3 separate)
+- `WR_31`: updated for 2 total calls (atomic + App)
+
+#### `tests/unit/entities/resolve.test.ts` — full rewrite
+- Updated ALL tests to reflect new call pattern:
+  - `runRead[0]` for normalizedName lookup (not runWrite)
+  - 1 atomic `runWrite` for CREATE Entity + HAS_ENTITY (not 2 separate)
+- Added `RESOLVE_ATOMIC`: single User-anchored write, no orphan risk
+- Added `RESOLVE_READ_ONLY`: Step 2 uses read session
+
+#### `tests/unit/mcp/tools.test.ts` — new tests
+- `MCP_ADD_DRAIN`: extraction from item N resolves before item N+1's addMemory starts
+- `MCP_ADD_DRAIN_TIMEOUT`: if extraction hangs >3s batch continues (fake timers, 3.1s advance)
+
+### Verification
+- `pnpm exec tsc --noEmit` → exit 0 (zero TypeScript errors)
+- `pnpm test --testPathPattern="tests/unit" --runInBand` → **228 tests, 24 suites, 0 failures**
+
+### Patterns
+- **globalThis singleton test isolation**: Tests that verify "no driver was ever created" must explicitly clear `globalThis.__memgraphDriver = null` in beforeEach or the test body, because globalThis persists across `jest.resetModules()` calls.
+- **Generic type args on `require()` results**: TypeScript TS2347 — can't use `<T>` on `any`-typed functions from `require()`. Use explicit type annotation on the result variable instead.
+- **Tantivy write contention**: Any code that calls multiple `runWrite` sessions concurrently risks Tantivy index writer conflicts. Always drain fire-and-forget extractors before the next write.
+- **Spec 09 namespace isolation**: ALL Cypher queries traversing Memory or Entity nodes MUST anchor through `(u:User {userId: $userId})`. Bare `MATCH (:Memory {id})` without User path violates namespace isolation.

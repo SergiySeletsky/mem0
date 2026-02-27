@@ -28,17 +28,32 @@ async function setConfig(updates: Record<string, unknown>): Promise<void> {
 }
 
 export async function GET() {
-  return NextResponse.json(await getConfig());
+  try {
+    return NextResponse.json(await getConfig());
+  } catch (err) {
+    console.error("[GET /api/v1/config] error:", err);
+    return NextResponse.json({ detail: "Internal server error" }, { status: 500 });
+  }
 }
 
 export async function PUT(request: NextRequest) {
-  const body = await request.json();
-  await setConfig(body);
-  return NextResponse.json(await getConfig());
+  try {
+    const body = await request.json();
+    await setConfig(body);
+    return NextResponse.json(await getConfig());
+  } catch (err) {
+    console.error("[PUT /api/v1/config] error:", err);
+    return NextResponse.json({ detail: "Internal server error" }, { status: 500 });
+  }
 }
 
 export async function PATCH(request: NextRequest) {
-  const body = await request.json();
-  await setConfig(body);
-  return NextResponse.json(await getConfig());
+  try {
+    const body = await request.json();
+    await setConfig(body);
+    return NextResponse.json(await getConfig());
+  } catch (err) {
+    console.error("[PATCH /api/v1/config] error:", err);
+    return NextResponse.json({ detail: "Internal server error" }, { status: 500 });
+  }
 }
