@@ -21,8 +21,9 @@
 | 13 (second) â€” Architectural Audit | 34 findings across all layers | Fixed `invalidAt: null` Cypher null literal bug; 7 HIGH findings documented in AUDIT_REPORT_SESSION13.md |
 | 14 (second) â€” Lint Analysis | 100+ lint warnings | Resolved import/type issues; no new patterns |
 | 15 â€” Frontend + API Audit | 22 new findings; 8 HIGH (frontend) | Stale closure, namespace violation, N+1 categorize documented in AUDIT_REPORT_SESSION15.md |
+| 13 â€" Graphiti-Inspired Enhancements | P0â€"P3: temporal edges, entity summaries, fast-path dedup, context injection | Bi-temporal edges + contradiction LLM, entity profile gen, fast-path normalized dedup, previous-memory context for extraction. 46 suites / 418 tests. |
 
-**Test baseline after completed sessions:** 315 tests, 45 suites, 0 failures
+**Test baseline after completed sessions:** 418 tests, 46 suites, 0 failures
 
 ---
 
@@ -901,3 +902,69 @@ Added `err: unknown` type annotation to `.catch()` callback in `summarizeEntityD
 ### Verification
 - `tsc --noEmit`: **0 errors** (first time ever — TS-001 resolved)
 - `jest --runInBand --no-coverage`: **45 suites / 398 tests — 0 failures**
+
+---
+
+## Session 13 — Graphiti-Inspired Pipeline Enhancements (P0–P3)
+
+### Objective
+Implement 4 Graphiti-inspired enhancements to the entity extraction and relationship pipeline. Each adds measurable value to the knowledge graph quality.
+
+### P0 — Edge Temporal Contradiction Detection (HIGH VALUE)
+- **File:** `lib/entities/relate.ts` (rewritten ~160 lines)
+- Before: MERGE-based `linkEntities()` that silently overwrote descriptions (kept longer)
+- After: Bi-temporal edges with `validAt`/`invalidAt` + LLM contradiction classification
+- Pipeline:
+  1. Check for existing live edge (`WHERE r.invalidAt IS NULL`)
+  2. P2 fast-path: identical normalized description → skip entirely
+  3. Both descriptions non-empty → LLM classifies: `SAME | UPDATE | CONTRADICTION`
+  4. `SAME` → no-op; `UPDATE`/`CONTRADICTION` → invalidate old edge, create new one
+  5. No existing edge → create with `validAt` timestamp
+- New export: `classifyEdgeContradiction()` — fail-open to `UPDATE` on LLM errors
+- **Prompt:** `EDGE_CONTRADICTION_PROMPT` added to `lib/entities/prompts.ts`
+
+### P1 — Entity Summary Generation (MEDIUM VALUE)
+- **New file:** `lib/entities/summarize-entity.ts` (~130 lines)
+- `generateEntitySummary(entityId)` — fetches all connected memories ([:MENTIONS]) and relationships ([:RELATED_TO]), generates comprehensive 2-4 sentence profile via LLM
+- `getEntityMentionCount(entityId)` — threshold check: only generates summary when entity has ≥ `SUMMARY_THRESHOLD` (3) connected memories
+- Writes to `e.summary` + `e.summaryUpdatedAt` on the Entity node
+- **Prompt:** `ENTITY_SUMMARY_PROMPT` added to `lib/entities/prompts.ts`
+- **Worker integration:** Step 9 in `worker.ts` — for Tier 1 hits (pre-existing entities), checks mention count and triggers summary generation. Best-effort with try/catch.
+
+### P2 — Fast-Path Edge Dedup (LOW-MEDIUM VALUE)
+- **Integrated into P0's `linkEntities()` rewrite**
+- Before the full MERGE/contradiction check: normalize descriptions (lowercase, collapse whitespace, trim)
+- If `normalizeDesc(oldDesc) === normalizeDesc(newDesc)` → skip entirely (no DB write, no LLM call)
+- Saves 1 `runWrite` + potentially 1 LLM call per duplicate edge
+
+### P3 — Previous Memory Context for Extraction (LOW-MEDIUM VALUE)
+- **File:** `lib/entities/extract.ts` — added `ExtractionOptions.previousMemories?: string[]`
+- `buildPreviousContextBlock()` — formats up to 3 recent memories with explicit instruction: "DO NOT extract entities from these, only use them to resolve pronouns and references"
+- Injected as suffix to the LLM user message in pass 1 extraction
+- **Worker integration:** Step 4a in `worker.ts` — fetches last 3 user memories (`WHERE m.id <> $memoryId AND m.invalidAt IS NULL, ORDER BY createdAt DESC, LIMIT 3`) before extraction
+- **Backward-compatible:** `extractEntitiesAndRelationships(content)` still works without options; `extractEntitiesFromMemory(content, options?)` also accepts optional context
+
+### Files Created (2)
+| File | Lines | Purpose |
+|------|-------|---------|
+| `lib/entities/summarize-entity.ts` | 130 | Entity profile summary generation |
+| `tests/unit/entities/summarize-entity.test.ts` | 135 | 7 tests: ESUM_01–06 |
+
+### Files Modified (5)
+| File | Change |
+|------|--------|
+| `lib/entities/relate.ts` | Full rewrite: temporal edges + fast-path dedup + LLM contradiction |
+| `lib/entities/extract.ts` | Added `ExtractionOptions`, `buildPreviousContextBlock()`, context injection |
+| `lib/entities/worker.ts` | Step 4a (P3 context fetch), Step 7 (entity names to linkEntities), Step 9 (P1 summary) |
+| `lib/entities/prompts.ts` | Added `EDGE_CONTRADICTION_PROMPT`, `ENTITY_SUMMARY_PROMPT` |
+| `tests/unit/entities/relate.test.ts` | Rewritten: 11 tests (RELATE_01–11) covering temporal + fast-path + contradiction |
+| `tests/unit/entities/worker.test.ts` | Updated all tests for P3 runRead, added WORKER_10 (P3), WORKER_11 (P1) |
+| `tests/unit/entities/extract.test.ts` | Added EXTRACT_05–07 (P3 context injection, cap at 3) |
+
+### Bugs Fixed During Test Writing
+- **Orphaned `mockResolvedValueOnce` leakage** (WORKER_04, WORKER_10): Tests that return `entities: []` don't trigger Tier 1 batch read, so the 4th Once value leaked into the next test. Fix: only queue the exact number of Once values that will be consumed.
+- **`SUMMARY_THRESHOLD` auto-mock**: `jest.mock("@/lib/entities/summarize-entity")` auto-replaces numeric exports with `0`, not `undefined`. Used `require()` to get mocked module reference instead of ESM import.
+
+### Test Results
+- **`tsc --noEmit`: 0 errors**
+- **`jest --runInBand --no-coverage`: 46 suites / 418 tests — 0 failures** (up from 45/398)

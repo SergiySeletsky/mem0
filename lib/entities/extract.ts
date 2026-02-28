@@ -28,6 +28,11 @@ export interface ExtractionResult {
   relationships: ExtractedRelationship[];
 }
 
+export interface ExtractionOptions {
+  /** Recent user memories for co-reference resolution. Injected into the LLM prompt. */
+  previousMemories?: string[];
+}
+
 function normalizeExtractedEntities(input: unknown): ExtractedEntity[] {
   if (!Array.isArray(input)) return [];
   const result: ExtractedEntity[] = [];
@@ -71,22 +76,35 @@ function getMaxGleanings(): number {
   return isNaN(n) ? 1 : Math.max(0, Math.min(n, 3)); // cap at 3
 }
 
+const PREVIOUS_CONTEXT_LIMIT = 3;
+
+/** Build a context prefix from previous memories for co-reference resolution. */
+function buildPreviousContextBlock(memories: string[]): string {
+  if (!memories.length) return "";
+  const items = memories.slice(0, PREVIOUS_CONTEXT_LIMIT);
+  return `\n\n[Previous memories for co-reference context — DO NOT extract entities from these, only use them to resolve pronouns and references in the current memory]\n${items.map((m, i) => `${i + 1}. ${m}`).join("\n")}\n`;
+}
+
 /**
  * Extract entities from a memory string (backward-compatible wrapper).
  * Returns only entities — used by callers that don't need relationships.
  */
 export async function extractEntitiesFromMemory(
-  content: string
+  content: string,
+  options?: ExtractionOptions
 ): Promise<ExtractedEntity[]> {
-  const result = await extractEntitiesAndRelationships(content);
+  const result = await extractEntitiesAndRelationships(content, options);
   return result.entities;
 }
 
 /**
  * Full extraction: entities + relationships with optional gleaning.
+ * When previousMemories are provided, they are injected into the prompt
+ * to help the LLM resolve pronouns and co-references across memories.
  */
 export async function extractEntitiesAndRelationships(
-  content: string
+  content: string,
+  options?: ExtractionOptions
 ): Promise<ExtractionResult> {
   const model = process.env.LLM_AZURE_DEPLOYMENT ?? process.env.MEMFORGE_CATEGORIZATION_MODEL ?? "gpt-4o-mini";
 
@@ -94,11 +112,14 @@ export async function extractEntitiesAndRelationships(
     const client = getLLMClient();
 
     // --- Pass 1: Primary extraction ---
+    const contextBlock = buildPreviousContextBlock(options?.previousMemories ?? []);
+    const userMessage = `Memory: ${content}${contextBlock}`;
+
     const response = await client.chat.completions.create({
       model,
       messages: [
         { role: "system", content: ENTITY_EXTRACTION_PROMPT },
-        { role: "user", content: `Memory: ${content}` },
+        { role: "user", content: userMessage },
       ],
       temperature: 0,
       max_tokens: 800,

@@ -7,7 +7,7 @@ export {};
  * EXTRACT_03: LLM error → returns [] without throwing (fail-open)
  * EXTRACT_04: Invalid JSON from LLM → returns [] without throwing
  */
-import { extractEntitiesFromMemory } from "@/lib/entities/extract";
+import { extractEntitiesFromMemory, extractEntitiesAndRelationships } from "@/lib/entities/extract";
 
 jest.mock("@/lib/ai/client", () => ({ getLLMClient: jest.fn() }));
 import { getLLMClient } from "@/lib/ai/client";
@@ -75,5 +75,70 @@ describe("extractEntitiesFromMemory", () => {
     await expect(
       extractEntitiesFromMemory("Alice works at Acme Corp")
     ).resolves.toEqual([]);
+  });
+});
+
+describe("extractEntitiesAndRelationships — P3 previous context", () => {
+  it("EXTRACT_05 (P3): previous memories injected into LLM user message", async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            entities: [{ name: "Alice", type: "PERSON", description: "Engineer" }],
+            relationships: [],
+          }),
+        },
+      }],
+    });
+
+    await extractEntitiesAndRelationships("She refactored the auth module", {
+      previousMemories: ["Alice uses TypeScript", "Alice deployed v2"],
+    });
+
+    // Check the user message contains previous context
+    const msgs = mockCreate.mock.calls[0][0].messages as Array<{ content: string }>;
+    const userMsg = msgs.find((m: { content: string }) => m.content.includes("She refactored"));
+    expect(userMsg).toBeDefined();
+    expect(userMsg!.content).toContain("Alice uses TypeScript");
+    expect(userMsg!.content).toContain("Alice deployed v2");
+    expect(userMsg!.content).toContain("co-reference");
+  });
+
+  it("EXTRACT_06 (P3): no previous memories → no context block in prompt", async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{
+        message: {
+          content: JSON.stringify({ entities: [], relationships: [] }),
+        },
+      }],
+    });
+
+    await extractEntitiesAndRelationships("Simple fact about Bob");
+
+    const msgs = mockCreate.mock.calls[0][0].messages as Array<{ content: string }>;
+    const userMsg = msgs.find((m: { content: string }) => m.content.includes("Simple fact"));
+    expect(userMsg!.content).not.toContain("co-reference");
+  });
+
+  it("EXTRACT_07 (P3): previous memories capped at 3", async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{
+        message: {
+          content: JSON.stringify({ entities: [], relationships: [] }),
+        },
+      }],
+    });
+
+    await extractEntitiesAndRelationships("New memory", {
+      previousMemories: ["mem1", "mem2", "mem3", "mem4", "mem5"],
+    });
+
+    const msgs = mockCreate.mock.calls[0][0].messages as Array<{ content: string }>;
+    const userMsg = msgs.find((m: { content: string }) => m.content.includes("New memory"));
+    expect(userMsg!.content).toContain("mem1");
+    expect(userMsg!.content).toContain("mem3");
+    // mem4 and mem5 should NOT be included (capped at 3)
+    expect(userMsg!.content).not.toContain("mem4");
+    expect(userMsg!.content).not.toContain("mem5");
   });
 });

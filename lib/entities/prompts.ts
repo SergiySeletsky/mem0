@@ -65,6 +65,47 @@ Description B: {descriptionB}
 
 Return ONLY the consolidated description text, no JSON wrapping.`;
 
+// ---------------------------------------------------------------------------
+// Edge contradiction detection prompt (Graphiti-inspired temporal edges)
+// ---------------------------------------------------------------------------
+
+export const EDGE_CONTRADICTION_PROMPT = `You are a fact comparison assistant.
+Given two statements about the same relationship between two entities, classify whether the new statement:
+- SAME: Says effectively the same thing as the old statement (paraphrase/rewording)
+- UPDATE: Adds new information or refines the old statement without contradicting it
+- CONTRADICTION: Directly contradicts the old statement (e.g., changed employer, reversed relationship, negated fact)
+
+Old statement: {oldDescription}
+New statement: {newDescription}
+Relationship type: {relType} (between {sourceName} and {targetName})
+
+Return ONLY valid JSON: {"verdict": "SAME"} or {"verdict": "UPDATE"} or {"verdict": "CONTRADICTION"}`;
+
+// ---------------------------------------------------------------------------
+// Entity profile summary prompt (Graphiti-inspired)
+// ---------------------------------------------------------------------------
+
+export const ENTITY_SUMMARY_PROMPT = `You are an entity knowledge summarization assistant.
+Given an entity and all known context about it (memories that mention it, its relationships), produce a comprehensive profile summary.
+
+Entity: {entityName}
+Type: {entityType}
+Current description: {entityDescription}
+
+Memories mentioning this entity:
+{memories}
+
+Known relationships:
+{relationships}
+
+Write a concise but comprehensive summary (2-4 sentences) that captures:
+1. Who/what this entity is
+2. Key facts and attributes
+3. Important relationships and roles
+4. Any notable changes or temporal information
+
+Return ONLY the summary text, no JSON wrapping.`;
+
 export interface MergeCandidate {
   name: string;
   type: string;

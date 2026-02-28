@@ -23,6 +23,7 @@ import { resolveEntity } from "./resolve";
 import { linkMemoryToEntity } from "./link";
 import { linkEntities } from "./relate";
 import { summarizeEntityDescription } from "./summarize-description";
+import { generateEntitySummary, getEntityMentionCount, SUMMARY_THRESHOLD } from "./summarize-entity";
 
 /** Local copy — avoids dependency on resolve.ts being mocked in tests. */
 function normalizeName(name: string): string {
@@ -57,9 +58,20 @@ export async function processEntityExtraction(memoryId: string): Promise<void> {
   );
 
   try {
-    // Step 4: Combined LLM extraction (entities + relationships)
+    // Step 4a: Fetch recent user memories for co-reference context (P3)
+    const recentRows = await runRead<{ content: string }>(
+      `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)
+       WHERE m.id <> $memoryId AND m.invalidAt IS NULL
+       RETURN m.content AS content
+       ORDER BY m.createdAt DESC
+       LIMIT 3`,
+      { userId, memoryId }
+    ).catch(() => []);
+    const previousMemories = recentRows.map((r) => r.content);
+
+    // Step 4b: Combined LLM extraction (entities + relationships)
     const { entities: extracted, relationships } =
-      await extractEntitiesAndRelationships(content as string);
+      await extractEntitiesAndRelationships(content as string, { previousMemories });
 
     // ENTITY-01: Tier 1 batch — look up all normalizedNames in one UNWIND round-trip.
     const validEntities = extracted.filter((e) => e.name?.trim());
@@ -91,11 +103,12 @@ export async function processEntityExtraction(memoryId: string): Promise<void> {
     }
 
     // Step 7: Create [:RELATED_TO] edges between resolved entities
+    //         Pass entity names for temporal contradiction LLM prompt context
     for (const rel of relationships) {
       const sourceId = entityNameToId.get(rel.source.toLowerCase());
       const targetId = entityNameToId.get(rel.target.toLowerCase());
       if (sourceId && targetId && sourceId !== targetId) {
-        await linkEntities(sourceId, targetId, rel.type, rel.description);
+        await linkEntities(sourceId, targetId, rel.type, rel.description, rel.source, rel.target);
       }
     }
 
@@ -114,7 +127,28 @@ export async function processEntityExtraction(memoryId: string): Promise<void> {
       }
     }
 
-    // Step 9: mark done
+    // Step 9: Entity profile summary for entities that have accumulated enough
+    // context (≥ SUMMARY_THRESHOLD connected memories).
+    // Only for Tier 1 hits — new entities can't have enough mentions yet.
+    // Best-effort: failures logged but never block the pipeline.
+    for (const entity of validEntities) {
+      const normName = normalizeName(entity.name);
+      if (tier1Map.has(normName)) {
+        const entityId = tier1Map.get(normName)!;
+        try {
+          const count = await getEntityMentionCount(entityId);
+          if (count >= SUMMARY_THRESHOLD) {
+            generateEntitySummary(entityId).catch((err: unknown) =>
+              console.warn("[worker] entitySummary failed:", err)
+            );
+          }
+        } catch (err: unknown) {
+          console.warn("[worker] mentionCount failed:", err);
+        }
+      }
+    }
+
+    // Step 10: mark done
     await runWrite(
       `MATCH (m:Memory {id: $memoryId}) SET m.extractionStatus = 'done'`,
       { memoryId }

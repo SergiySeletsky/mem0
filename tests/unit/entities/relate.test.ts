@@ -2,33 +2,58 @@ export {};
 /**
  * Unit tests — relate.ts (lib/entities/relate.ts)
  *
- * RELATE_01: linkEntities calls runWrite with MERGE + correct params
+ * RELATE_01: No existing edge → creates new edge with validAt
  * RELATE_02: relType uppercased and spaces replaced with underscores
  * RELATE_03: default description is empty string
+ * RELATE_04: P2 Fast-path → identical normalized desc → skip (no write)
+ * RELATE_05: P0 Contradiction → LLM says CONTRADICTION → invalidates old, creates new
+ * RELATE_06: P0 Update → LLM says UPDATE → invalidates old, creates new
+ * RELATE_07: P0 Same → LLM says SAME → no change (no write)
+ * RELATE_08: P0 LLM failure → fail-open → UPDATE behaviour (invalidate + create)
+ * RELATE_09: classifyEdgeContradiction returns correct verdict types
  */
-import { linkEntities } from "@/lib/entities/relate";
+import { linkEntities, classifyEdgeContradiction } from "@/lib/entities/relate";
 
-jest.mock("@/lib/db/memgraph", () => ({ runWrite: jest.fn() }));
+jest.mock("@/lib/db/memgraph", () => ({ runRead: jest.fn(), runWrite: jest.fn() }));
+jest.mock("@/lib/ai/client");
 
-import { runWrite } from "@/lib/db/memgraph";
+import { runRead, runWrite } from "@/lib/db/memgraph";
+import { getLLMClient } from "@/lib/ai/client";
 
+const mockRunRead = runRead as jest.MockedFunction<typeof runRead>;
 const mockRunWrite = runWrite as jest.MockedFunction<typeof runWrite>;
+const mockGetLLMClient = getLLMClient as jest.MockedFunction<typeof getLLMClient>;
 
-beforeEach(() => jest.clearAllMocks());
+const mockCreate = jest.fn();
+mockGetLLMClient.mockReturnValue({
+  chat: { completions: { create: mockCreate } },
+} as unknown as ReturnType<typeof getLLMClient>);
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockGetLLMClient.mockReturnValue({
+    chat: { completions: { create: mockCreate } },
+  } as unknown as ReturnType<typeof getLLMClient>);
+});
 
 describe("linkEntities", () => {
-  it("RELATE_01: calls runWrite with MERGE and correct entity IDs", async () => {
+  it("RELATE_01: no existing edge → creates new edge with validAt", async () => {
+    mockRunRead.mockResolvedValueOnce([]); // no existing edge
     mockRunWrite.mockResolvedValue([]);
 
-    await linkEntities("ent-src", "ent-tgt", "WORKS_AT", "Alice works at Acme");
+    await linkEntities("ent-src", "ent-tgt", "WORKS_AT", "Alice works at Acme", "Alice", "Acme");
 
+    // runRead called to check for existing edge
+    expect(mockRunRead).toHaveBeenCalledTimes(1);
+    const readCypher = mockRunRead.mock.calls[0][0] as string;
+    expect(readCypher).toContain("RELATED_TO");
+    expect(readCypher).toContain("invalidAt IS NULL");
+
+    // Only one runWrite: CREATE new edge
     expect(mockRunWrite).toHaveBeenCalledTimes(1);
     const [cypher, params] = mockRunWrite.mock.calls[0] as [string, Record<string, unknown>];
-
-    expect(cypher).toContain("MERGE");
-    expect(cypher).toContain("RELATED_TO");
-    expect(cypher).toContain("ON CREATE SET");
-    expect(cypher).toContain("ON MATCH SET");
+    expect(cypher).toContain("CREATE");
+    expect(cypher).toContain("validAt");
     expect(params.sourceId).toBe("ent-src");
     expect(params.targetId).toBe("ent-tgt");
     expect(params.relType).toBe("WORKS_AT");
@@ -36,6 +61,7 @@ describe("linkEntities", () => {
   });
 
   it("RELATE_02: relType is uppercased and spaces become underscores", async () => {
+    mockRunRead.mockResolvedValueOnce([]);
     mockRunWrite.mockResolvedValue([]);
 
     await linkEntities("a", "b", "works at", "desc");
@@ -45,11 +71,117 @@ describe("linkEntities", () => {
   });
 
   it("RELATE_03: empty description default", async () => {
+    mockRunRead.mockResolvedValueOnce([]);
     mockRunWrite.mockResolvedValue([]);
 
     await linkEntities("a", "b", "TYPE");
 
     const params = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
     expect(params.desc).toBe("");
+  });
+
+  it("RELATE_04 (P2): identical normalized description → skip entirely (fast-path)", async () => {
+    // Existing edge with same description (different whitespace/casing)
+    mockRunRead.mockResolvedValueOnce([{ desc: "Alice works at Acme Corp" }]);
+
+    await linkEntities("a", "b", "WORKS_AT", "alice works at acme corp");
+
+    // No writes at all — fast-path dedup
+    expect(mockRunWrite).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("RELATE_05 (P0): LLM says CONTRADICTION → invalidates old, creates new edge", async () => {
+    mockRunRead.mockResolvedValueOnce([{ desc: "Alice works at Acme Corp" }]);
+    mockRunWrite.mockResolvedValue([]);
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: '{"verdict": "CONTRADICTION"}' } }],
+    });
+
+    await linkEntities("a", "b", "WORKS_AT", "Alice left Acme Corp", "Alice", "Acme Corp");
+
+    // LLM called for contradiction detection
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    // Two writes: invalidate old + create new
+    expect(mockRunWrite).toHaveBeenCalledTimes(2);
+
+    const invalidateCypher = mockRunWrite.mock.calls[0][0] as string;
+    expect(invalidateCypher).toContain("invalidAt");
+
+    const createCypher = mockRunWrite.mock.calls[1][0] as string;
+    expect(createCypher).toContain("CREATE");
+    expect(createCypher).toContain("validAt");
+  });
+
+  it("RELATE_06 (P0): LLM says UPDATE → invalidates old, creates new edge", async () => {
+    mockRunRead.mockResolvedValueOnce([{ desc: "Alice works at Acme" }]);
+    mockRunWrite.mockResolvedValue([]);
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: '{"verdict": "UPDATE"}' } }],
+    });
+
+    await linkEntities("a", "b", "WORKS_AT", "Alice works at Acme as a senior engineer", "Alice", "Acme");
+
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockRunWrite).toHaveBeenCalledTimes(2); // invalidate + create
+  });
+
+  it("RELATE_07 (P0): LLM says SAME → no writes at all", async () => {
+    mockRunRead.mockResolvedValueOnce([{ desc: "Alice works at Acme Corp" }]);
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: '{"verdict": "SAME"}' } }],
+    });
+
+    await linkEntities("a", "b", "WORKS_AT", "Alice is employed at Acme Corp", "Alice", "Acme Corp");
+
+    // LLM called but verdict is SAME → no writes
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockRunWrite).not.toHaveBeenCalled();
+  });
+
+  it("RELATE_08 (P0): LLM failure → fail-open UPDATE (invalidate + create)", async () => {
+    mockRunRead.mockResolvedValueOnce([{ desc: "Alice works at OldCo" }]);
+    mockRunWrite.mockResolvedValue([]);
+    mockCreate.mockRejectedValueOnce(new Error("LLM timeout"));
+
+    await linkEntities("a", "b", "WORKS_AT", "Alice works at NewCo", "Alice", "NewCo");
+
+    // LLM failed → fail-open to UPDATE → 2 writes
+    expect(mockRunWrite).toHaveBeenCalledTimes(2);
+  });
+
+  it("RELATE_09: existing edge with empty desc, new desc has content → invalidate + create", async () => {
+    mockRunRead.mockResolvedValueOnce([{ desc: "" }]);
+    mockRunWrite.mockResolvedValue([]);
+
+    await linkEntities("a", "b", "USES", "Postgres is the primary database", "Alice", "Postgres");
+
+    // No LLM call needed (old desc empty) → invalidate old + create new
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockRunWrite).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("classifyEdgeContradiction", () => {
+  it("RELATE_10: returns correct verdict from LLM response", async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: '{"verdict": "CONTRADICTION"}' } }],
+    });
+
+    const result = await classifyEdgeContradiction(
+      "Alice works at Acme", "Alice left Acme", "WORKS_AT", "Alice", "Acme"
+    );
+    expect(result).toBe("CONTRADICTION");
+  });
+
+  it("RELATE_11: unrecognized verdict → falls back to UPDATE", async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: '{"verdict": "UNKNOWN"}' } }],
+    });
+
+    const result = await classifyEdgeContradiction(
+      "old fact", "new fact", "TYPE", "A", "B"
+    );
+    expect(result).toBe("UPDATE");
   });
 });
