@@ -193,7 +193,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
             let id: string;
             if (dedup.action === "supersede") {
               console.log(`[MCP] add_memories dedup supersede -- superseding ${dedup.existingId}`);
-              id = await supersedeMemory(dedup.existingId, text, userId, clientName);
+              id = await supersedeMemory(dedup.existingId, text, userId, clientName, explicitTags);
             } else {
               id = await addMemory(text, {
                 userId,
@@ -206,8 +206,11 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
             const event = dedup.action === "supersede" ? "SUPERSEDE" : "ADD";
 
             // Write explicit tags to the memory node (for both ADD and SUPERSEDE).
-            // supersedeMemory() creates a new node without tags, so we patch them here.
-            if (explicitTags && explicitTags.length > 0) {
+            // supersedeMemory() now accepts tags directly, but for the ADD path
+            // tags are already passed via addMemory opts. Patch only on SUPERSEDE.
+            if (explicitTags && explicitTags.length > 0 && dedup.action === "supersede") {
+              // Tags were not passed to supersedeMemory above; patch them now.
+              // (A future refactor could pass tags to supersedeMemory directly.)
               await runWrite(
                 `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memId})
                  SET m.tags = $tags`,
@@ -215,18 +218,18 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
               ).catch((e: unknown) => console.warn("[explicit tags]", e));
             }
 
-            // Write explicit categories (if provided) immediately after the memory is created.
+            // Write explicit categories (if provided) in a single UNWIND round-trip (MCP-CAT-01 fix).
             // The LLM auto-categorizer (inside addMemory/supersedeMemory) still runs
             // fire-and-forget and may add additional categories via MERGE (no duplicates).
             if (explicitCategories && explicitCategories.length > 0) {
-              for (const catName of explicitCategories) {
-                await runWrite(
-                  `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memId})
-                   MERGE (c:Category {name: $name})
-                   MERGE (m)-[:HAS_CATEGORY]->(c)`,
-                  { userId, memId: id, name: catName }
-                ).catch((e: unknown) => console.warn("[explicit category]", e));
-              }
+              await runWrite(
+                `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memId})
+                 WITH m
+                 UNWIND $categories AS catName
+                 MERGE (c:Category {name: catName})
+                 MERGE (m)-[:HAS_CATEGORY]->(c)`,
+                { userId, memId: id, categories: explicitCategories }
+              ).catch((e: unknown) => console.warn("[explicit categories]", e));
             }
 
             // Spec 04: Async entity extraction -- tracked so next iteration can drain it
@@ -305,33 +308,25 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
           if (category) browseParams.category = category;
           if (tag) browseParams.tag = tag;
 
-          const countRows = await runRead<{ total: number }>(
-            `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)
-             WHERE m.invalidAt IS NULL AND m.state <> 'deleted'
-             ${tag ? `AND ANY(t IN coalesce(m.tags, []) WHERE toLower(t) = toLower($tag))` : ""}
-             ${category ? `MATCH (m)-[:HAS_CATEGORY]->(cFilter:Category) WHERE toLower(cFilter.name) = toLower($category)` : ""}
-             RETURN count(m) AS total`,
-            browseParams
-          );
-          const total = countRows[0]?.total ?? 0;
-
+          // MCP-BROWSE-01 fix: single Cypher query computes count + paginated rows in one round-trip
           const rows = await runRead<{
-            id: string; content: string; createdAt: string; updatedAt: string; categories: string[]; tags: string[];
+            id: string; content: string; createdAt: string; updatedAt: string; categories: string[]; tags: string[]; total: number;
           }>(
             `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)
              WHERE m.invalidAt IS NULL AND m.state <> 'deleted'
              ${tag ? `AND ANY(t IN coalesce(m.tags, []) WHERE toLower(t) = toLower($tag))` : ""}
              ${category ? `MATCH (m)-[:HAS_CATEGORY]->(cFilter:Category) WHERE toLower(cFilter.name) = toLower($category)` : ""}
+             WITH m ORDER BY m.createdAt DESC
+             WITH collect(m) AS allMems, count(m) AS total
+             UNWIND allMems[toInteger($offset)..(toInteger($offset) + toInteger($limit))] AS m
              OPTIONAL MATCH (m)-[:HAS_CATEGORY]->(c:Category)
-             WITH m, collect(c.name) AS categories
-             ORDER BY m.createdAt DESC
-             SKIP $offset
-             LIMIT $limit
+             WITH m, collect(c.name) AS categories, total
              RETURN m.id AS id, m.content AS content,
                     m.createdAt AS createdAt, m.updatedAt AS updatedAt,
-                    categories, coalesce(m.tags, []) AS tags`,
+                    categories, coalesce(m.tags, []) AS tags, total`,
             browseParams
           );
+          const total = rows[0]?.total ?? 0;
 
           console.log(`[MCP] search_memory browse done in ${Date.now() - t0}ms count=${rows.length} total=${total}`);
 
@@ -357,12 +352,16 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
 
         // -- SEARCH MODE --
         const effectiveLimit = limit ?? 10;
-        console.log(`[MCP] search_memory search userId=${userId} query="${query}" limit=${effectiveLimit}`);
+        // MCP-FILTER-01 fix: when post-filters are active, fetch extra candidates
+        // so the final filtered set is closer to the requested limit.
+        const hasPostFilters = !!(category || created_after || tag);
+        const fetchLimit = hasPostFilters ? effectiveLimit * 3 : effectiveLimit;
+        console.log(`[MCP] search_memory search userId=${userId} query="${query}" limit=${effectiveLimit} fetchLimit=${fetchLimit}`);
 
         // Spec 02: hybrid search (BM25 + vector + RRF)
         const results = await hybridSearch(query!, {
           userId,
-          topK: effectiveLimit,
+          topK: fetchLimit,
           mode: "hybrid",
         });
 
@@ -382,9 +381,12 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
           );
         }
 
+        // Cap to requested limit after post-filtering (MCP-FILTER-01)
+        filtered = filtered.slice(0, effectiveLimit);
+
         console.log(`[MCP] search_memory search done in ${Date.now() - t0}ms hits=${results.length} filtered=${filtered.length}`);
 
-        // Log access for each hit -- fire-and-forget
+        // Log access for each hit -- fire-and-forget (ACCESS-LOG-01: MERGE to prevent unbounded edge growth)
         if (filtered.length > 0) {
           const now = new Date().toISOString();
           const ids = filtered.map(r => r.id);
@@ -393,7 +395,8 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
              WITH a
              MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)
              WHERE m.id IN $ids
-             CREATE (a)-[:ACCESSED {accessedAt: $accessedAt, queryUsed: $query}]->(m)`,
+             MERGE (a)-[rel:ACCESSED]->(m)
+             SET rel.accessedAt = $accessedAt, rel.queryUsed = $query, rel.accessCount = coalesce(rel.accessCount, 0) + 1`,
             { appName: clientName, userId, ids, accessedAt: now, query }
           ).catch(() => {/* non-critical */});
         }

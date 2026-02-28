@@ -4,13 +4,13 @@ export {};
  *
  * After the atomicity + read-session fix:
  *  - Step 2 (normalizedName lookup) now uses runRead (not runWrite)
- *  - Entity creation is one atomic runWrite (CREATE Entity + CREATE HAS_ENTITY)
+ *  - Entity creation is one atomic runWrite (MERGE Entity via (u)-[:HAS_ENTITY] pattern)
  *
  * New call pattern for "create new PERSON entity":
  *   runWrite[0]  User MERGE
  *   runRead[0]   normalizedName exact lookup  → empty
  *   runRead[1]   alias lookup (PERSON only)   → empty
- *   runWrite[1]  atomic CREATE Entity + HAS_ENTITY
+ *   runWrite[1]  MERGE (u)-[:HAS_ENTITY]->(e:Entity {normalizedName, userId}) ON CREATE SET ...
  *
  * RESOLVE_01: First call creates a new Entity, returns an id
  * RESOLVE_02: Second call with same name returns the SAME id (normalizedName dedup)
@@ -24,6 +24,7 @@ export {};
  * RESOLVE_16: Domain-specific type "SERVICE" upgrades "CONCEPT" (open ontology)
  * RESOLVE_ATOMIC: entity creation is a single User-anchored write (atomicity fix)
  * RESOLVE_READ_ONLY: Step 2 uses read session (runRead), not write session
+ * RESOLVE_DUP_SAFE: MERGE returns existing entity id when concurrent writer beats us (ENTITY-DUP-FIX)
  */
 import { resolveEntity } from "@/lib/entities/resolve";
 
@@ -435,10 +436,10 @@ describe("resolveEntity", () => {
   // ---------------------------------------------------------------------------
 
   it("RESOLVE_ATOMIC: entity creation is a single User-anchored atomic write (no orphan risk)", async () => {
-    // PERSON type: User MERGE + (exact lookup + alias lookup both empty) + atomic create
+    // PERSON type: User MERGE + (exact lookup + alias lookup both empty) + MERGE entity
     mockRunWrite
       .mockResolvedValueOnce([{}])   // User MERGE
-      .mockResolvedValueOnce([{}]);  // atomic CREATE
+      .mockResolvedValueOnce([{}]);  // MERGE entity (ENTITY-DUP-FIX: was CREATE)
     mockRunRead
       .mockResolvedValueOnce([])     // exact lookup
       .mockResolvedValueOnce([]);    // alias lookup
@@ -450,13 +451,32 @@ describe("resolveEntity", () => {
     const createCall = mockRunWrite.mock.calls[1][0] as string;
     const createParams = mockRunWrite.mock.calls[1][1] as Record<string, unknown>;
 
-    // Single call creates Entity AND HAS_ENTITY edge
-    expect(createCall).toContain("CREATE");
+    // Single call creates Entity AND HAS_ENTITY edge (via MERGE pattern)
+    expect(createCall).toContain("MERGE");
     expect(createCall).toContain(":Entity");
     expect(createCall).toContain("HAS_ENTITY");
     // Anchored through User for namespace isolation
     expect(createCall).toContain("User {userId: $userId}");
     expect(createParams.userId).toBe("user-1");
+  });
+
+  it("RESOLVE_DUP_SAFE: MERGE returns existing entityId when a concurrent writer beat us (ENTITY-DUP-FIX)", async () => {
+    // Simulates the race: 3-tier lookup returned empty (no existing entity),
+    // but by the time our MERGE fires, another writer already created the node.
+    // Memgraph's MERGE finds it and returns the existing id — we use that id.
+    // CONCEPT type: only 1 runRead (normalizedName exact lookup, no alias lookup).
+    mockRunRead.mockResolvedValueOnce([]);   // normalizedName exact lookup → empty
+    mockRunWrite
+      .mockResolvedValueOnce([{}])                               // User MERGE
+      .mockResolvedValueOnce([{ entityId: "concurrent-id" }]);  // MERGE: concurrent writer's node returned
+
+    const id = await resolveEntity(
+      { name: "SharedEntity", type: "CONCEPT", description: "" },
+      "user-1"
+    );
+
+    // Must use the id returned by MERGE (the concurrent writer's entity), not our generated UUID
+    expect(id).toBe("concurrent-id");
   });
 
   it("RESOLVE_READ_ONLY: Step 2 normalizedName lookup uses runRead (not runWrite)", async () => {

@@ -10,8 +10,8 @@
  * Spec 04: POST async entity extraction (fire-and-forget)
  */
 import { NextRequest, NextResponse } from "next/server";
-import { runRead } from "@/lib/db/memgraph";
-import { addMemory, deleteMemory, supersedeMemory } from "@/lib/memory/write";
+import { runRead, runWrite } from "@/lib/db/memgraph";
+import { addMemory, supersedeMemory } from "@/lib/memory/write";
 import { listMemories } from "@/lib/memory/search";
 import { hybridSearch } from "@/lib/search/hybrid";
 import { checkDeduplication } from "@/lib/dedup";
@@ -183,9 +183,11 @@ export async function POST(request: NextRequest) {
 
     if (dedup.action === "skip") {
       // Return the existing memory without writing a duplicate
+      // Spec 09: anchor to User — prevents cross-user memory ID probing
       const existing = await runRead(
-        `MATCH (m:Memory {id: $id}) RETURN m.id AS id, m.content AS content, m.state AS state, m.createdAt AS createdAt`,
-        { id: dedup.existingId }
+        `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $id})
+         RETURN m.id AS id, m.content AS content, m.state AS state, m.createdAt AS createdAt`,
+        { userId: body.user_id, id: dedup.existingId }
       );
       return NextResponse.json({ ...(existing[0] ?? { id: dedup.existingId }), event: "SKIP_DUPLICATE" });
     }
@@ -231,11 +233,17 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
-    let deletedCount = 0;
-    for (const memoryId of body.memory_ids) {
-      const ok = await deleteMemory(memoryId, body.user_id);
-      if (ok) deletedCount++;
-    }
+    // API-DELETE-01 fix: batch delete in a single round-trip using UNWIND
+    const now = new Date().toISOString();
+    const result = await runWrite(
+      `UNWIND $ids AS memId
+       MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: memId})
+       WHERE m.state <> 'deleted'
+       SET m.state = 'deleted', m.invalidAt = $now, m.deletedAt = $now
+       RETURN m.id AS id`,
+      { userId: body.user_id, ids: body.memory_ids, now }
+    );
+    const deletedCount = result.length;
     return NextResponse.json({ message: `Successfully deleted ${deletedCount} memories` });
   } catch (e: unknown) {
     console.error("DELETE /memories error:", e);

@@ -70,7 +70,7 @@ export async function checkDeduplication(
   // Detect active embedding provider to apply provider-specific cosine threshold.
   // Azure text-embedding-3-small scores supSim=0.613 on updated personal facts —
   // well below the 0.75 default — so a lower threshold is required to catch updates.
-  // intelli-embed-v3 scores supSim=0.580 — even lower — use an intelli-specific threshold.
+  // intelli-embed-v3 scores supSim=0.580 — even lower — use its own dedicated threshold.
   const _provider = (process.env.EMBEDDING_PROVIDER ?? "intelli").toLowerCase();
   const _hasAzureKey = !!process.env.EMBEDDING_AZURE_OPENAI_API_KEY;
   const isAzure = _provider === "azure" && _hasAzureKey;
@@ -78,7 +78,7 @@ export async function checkDeduplication(
   const effectiveThreshold = isAzure
     ? config.azureThreshold
     : isIntelli
-      ? (config.azureThreshold ?? config.threshold) // v3 supSim=0.580, similar to Azure; reuse azureThreshold (0.55)
+      ? config.intelliThreshold
       : config.threshold;
 
   // Stage 1: Find near-duplicates by vector similarity (with provider-aware threshold)

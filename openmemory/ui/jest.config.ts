@@ -4,7 +4,13 @@ const config: Config = {
   preset: "ts-jest",
   testEnvironment: "node",
   rootDir: ".",
-  testMatch: ["<rootDir>/tests/**/*.test.ts"],
+  // Exclude e2e tests from the default run — they require a live server + Memgraph.
+  // Run e2e separately via: pnpm test:e2e
+  testMatch: [
+    "<rootDir>/tests/unit/**/*.test.ts",
+    "<rootDir>/tests/baseline/**/*.test.ts",
+    "<rootDir>/tests/security/**/*.test.ts",
+  ],
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/$1",
     // pnpm symlinks on Windows / ESM-only packages: resolve via manual mocks

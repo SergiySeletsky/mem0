@@ -20,6 +20,7 @@ import { embed } from "@/lib/embeddings/openai";
 import { getRecentMemories, buildContextPrefix } from "./context";
 import { getContextWindowConfig } from "@/lib/config/helpers";
 import { categorizeMemory } from "./categorize";
+import { addHistory } from "./history";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -123,6 +124,9 @@ export async function addMemory(
   // Async categorization — fire-and-forget, never blocks response
   categorizeMemory(id, text).catch((e) => console.warn("[categorize]", e));
 
+  // Async audit trail — fire-and-forget
+  addHistory(id, null, text, "ADD").catch((e) => console.warn("[history]", e));
+
   return id;
 }
 
@@ -131,8 +135,9 @@ export async function addMemory(
 // ---------------------------------------------------------------------------
 
 /**
- * Re-embed content and update an existing Memory node in-place.
- * (Bi-temporal supersession via Spec 01 is layered on top later.)
+ * @deprecated Use supersedeMemory() instead — in-place updates violate Spec 01
+ * bi-temporal model. Kept only for backward-compatible test assertions.
+ * All HTTP routes have been migrated to supersedeMemory() (see PUT /memories/:id).
  */
 export async function updateMemory(
   memoryId: string,
@@ -174,11 +179,24 @@ export async function supersedeMemory(
   oldId: string,
   newContent: string,
   userId: string,
-  appName?: string
+  appName?: string,
+  /** Tags to propagate to the new memory node. When omitted, inherits tags from the old node. */
+  tags?: string[]
 ): Promise<string> {
   const now = new Date().toISOString();
   const newId = randomUUID();
   const embedding = await embed(newContent);
+
+  // Inherit tags from old memory when not explicitly provided (WRITE-04 fix)
+  let effectiveTags = tags;
+  if (!effectiveTags) {
+    const oldRows = await runRead<{ tags: string[] }>(
+      `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $oldId})
+       RETURN coalesce(m.tags, []) AS tags`,
+      { userId, oldId }
+    );
+    effectiveTags = oldRows[0]?.tags ?? [];
+  }
 
   // Steps 1-3 combined: invalidate old, create new, link to user, create SUPERSEDES edge.
   // Anchored to User (Spec 09 — namespace isolation): both old and new Memory
@@ -193,6 +211,7 @@ export async function supersedeMemory(
        state: 'active',
        embedding: $embedding,
        metadata: '{}',
+       tags: $tags,
        validAt: $now,
        createdAt: $now,
        updatedAt: $now
@@ -200,7 +219,7 @@ export async function supersedeMemory(
      CREATE (u)-[:HAS_MEMORY]->(new)
      CREATE (new)-[:SUPERSEDES {at: $now}]->(old)
      RETURN new.id AS id`,
-    { userId, oldId, newId, newContent, embedding, now }
+    { userId, oldId, newId, newContent, embedding, now, tags: effectiveTags }
   );
 
   // Step 4: Attach new Memory to App if provided (optional, separate session)
@@ -216,6 +235,9 @@ export async function supersedeMemory(
 
   // Async categorization of the new node — fire-and-forget
   categorizeMemory(newId, newContent).catch((e) => console.warn("[categorize]", e));
+
+  // Async audit trail — fire-and-forget (records old → new content change)
+  addHistory(newId, null, newContent, "SUPERSEDE").catch((e) => console.warn("[history]", e));
 
   return newId;
 }
@@ -238,7 +260,14 @@ export async function deleteMemory(
      RETURN m.id AS id`,
     { userId, id: memoryId, now }
   );
-  return rows.length > 0;
+  const deleted = rows.length > 0;
+
+  // Async audit trail — fire-and-forget
+  if (deleted) {
+    addHistory(memoryId, null, null, "DELETE").catch((e) => console.warn("[history]", e));
+  }
+
+  return deleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +286,13 @@ export async function archiveMemory(
      RETURN m.id AS id`,
     { userId, id: memoryId, now }
   );
-  return rows.length > 0;
+  const archived = rows.length > 0;
+
+  if (archived) {
+    addHistory(memoryId, null, null, "ARCHIVE").catch((e) => console.warn("[history]", e));
+  }
+
+  return archived;
 }
 
 export async function pauseMemory(
@@ -271,7 +306,13 @@ export async function pauseMemory(
      RETURN m.id AS id`,
     { userId, id: memoryId, updatedAt: new Date().toISOString() }
   );
-  return rows.length > 0;
+  const paused = rows.length > 0;
+
+  if (paused) {
+    addHistory(memoryId, null, null, "PAUSE").catch((e) => console.warn("[history]", e));
+  }
+
+  return paused;
 }
 
 // ---------------------------------------------------------------------------

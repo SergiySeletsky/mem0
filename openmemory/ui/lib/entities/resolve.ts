@@ -282,18 +282,21 @@ export async function resolveEntity(
       );
     }
   } else {
-    // Create new entity and attach to User atomically in a single session.
-    // Anchoring through User prevents orphan Entity nodes if the process dies
-    // between the old two-step write.
-    await runWrite(
+    // ENTITY-DUP-FIX: use MERGE on (userId, normalizedName) via the User→Entity
+    // relationship pattern instead of CREATE. Memgraph acquires an exclusive
+    // internal lock on the matched edge pattern, so two concurrent callers for
+    // the same entity produce exactly one node — eliminating the TOCTOU race
+    // that produced duplicate Entity nodes during parallel test runs.
+    //
+    // ON MATCH: no-op — this branch only runs when the 3-tier lookup above found
+    // nothing, so a concurrent writer beat us here. We get its entity id back.
+    const created = await runWrite<{ entityId: string }>(
       `MATCH (u:User {userId: $userId})
-       CREATE (e:Entity {
-         id: $id, userId: $userId,
-         name: $name, normalizedName: $normalizedName,
-         type: $type, description: $description,
-         createdAt: $now, updatedAt: $now
-       })
-       CREATE (u)-[:HAS_ENTITY]->(e)`,
+       MERGE (u)-[:HAS_ENTITY]->(e:Entity {normalizedName: $normalizedName, userId: $userId})
+       ON CREATE SET e.id = $id, e.name = $name, e.type = $type,
+                     e.description = $description,
+                     e.createdAt = $now, e.updatedAt = $now
+       RETURN e.id AS entityId`,
       {
         id,
         userId,
@@ -304,7 +307,9 @@ export async function resolveEntity(
         now,
       }
     );
-    entityId = id;
+    // Use the id returned by MERGE — may differ from $id if a concurrent writer
+    // beat us to the CREATE (in which case we reuse their entity, not ours).
+    entityId = created[0]?.entityId ?? id;
   }
 
   // Fire-and-forget: compute description embedding for future semantic dedup lookups

@@ -40,25 +40,24 @@ describe("categorizeMemory", () => {
     mockCreate.mockResolvedValue(llmReply('["Personal","Work"]'));
     await categorizeMemory("mem-1", "meeting notes");
 
-    // 2 valid categories → 2 runWrite calls
-    expect(mockRunWrite).toHaveBeenCalledTimes(2);
+    // Single UNWIND batch write for all valid categories
+    expect(mockRunWrite).toHaveBeenCalledTimes(1);
     const firstCypher = mockRunWrite.mock.calls[0][0] as string;
     expect(firstCypher).toContain(":Category");
     expect(firstCypher).toContain("HAS_CATEGORY");
+    expect(firstCypher).toContain("UNWIND");
     const firstParams = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
-    expect(firstParams.name).toBe("Personal");
+    expect(firstParams.names).toEqual(["Personal", "Work"]);
   });
 
   test("CAT_02: filters out invalid category names", async () => {
     mockCreate.mockResolvedValue(llmReply('["Personal","InvalidCat","Travel"]'));
     await categorizeMemory("mem-1", "trip plans");
 
-    // Only Personal + Travel are valid
-    expect(mockRunWrite).toHaveBeenCalledTimes(2);
-    const names = mockRunWrite.mock.calls.map(
-      (c: unknown[]) => (c[1] as Record<string, unknown>).name
-    );
-    expect(names).toEqual(["Personal", "Travel"]);
+    // Only Personal + Travel are valid — single batch call
+    expect(mockRunWrite).toHaveBeenCalledTimes(1);
+    const params = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
+    expect(params.names).toEqual(["Personal", "Travel"]);
   });
 
   test("CAT_03: handles JSON wrapped in extra text", async () => {
@@ -67,11 +66,9 @@ describe("categorizeMemory", () => {
     );
     await categorizeMemory("mem-1", "ai course");
 
-    expect(mockRunWrite).toHaveBeenCalledTimes(2);
-    const names = mockRunWrite.mock.calls.map(
-      (c: unknown[]) => (c[1] as Record<string, unknown>).name
-    );
-    expect(names).toEqual(["Technology", "Education"]);
+    expect(mockRunWrite).toHaveBeenCalledTimes(1);
+    const params = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
+    expect(params.names).toEqual(["Technology", "Education"]);
   });
 
   test("CAT_04: non-array response → no categories written", async () => {

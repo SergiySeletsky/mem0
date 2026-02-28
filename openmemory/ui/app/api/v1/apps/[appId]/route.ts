@@ -8,7 +8,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   const rows = await runRead<{ name: string; id: string; is_active: boolean; created_at: string; memory_count: number }>(
     `MATCH (a:App) WHERE a.appName = $appId OR a.id = $appId
      OPTIONAL MATCH (:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)-[:CREATED_BY]->(a)
-     WHERE m IS NULL OR m.state = 'active'
+     WHERE m IS NULL OR (m.state = 'active' AND m.invalidAt IS NULL)
      RETURN a.appName AS name, a.id AS id, a.isActive AS is_active,
             a.createdAt AS created_at, count(m) AS memory_count`,
     { appId, userId: userId || "" }

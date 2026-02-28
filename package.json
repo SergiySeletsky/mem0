@@ -2,6 +2,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "pnpm --filter \"./openmemory/ui\" dev",
+    "build": "pnpm --filter \"./openmemory/ui\" build",
+    "test": "pnpm --filter \"./openmemory/ui\" test",
+    "test:e2e": "pnpm --filter \"./openmemory/ui\" test:e2e",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

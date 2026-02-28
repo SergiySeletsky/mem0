@@ -17,6 +17,9 @@ import { textSearch } from "./text";
 import { vectorSearch } from "./vector";
 import { reciprocalRankFusion, type RRFResult } from "./rrf";
 import { runRead } from "@/lib/db/memgraph";
+// SEARCH-01 fix: pre-import rerank/mmr at module level to avoid first-call dynamic import latency
+import { crossEncoderRerank } from "./rerank";
+import { mmrRerank } from "./mmr";
 
 export type SearchMode = "hybrid" | "text" | "vector";
 
@@ -113,7 +116,6 @@ export async function hybridSearch(
   const rerankTopN = opts.rerankTopN ?? topK;
 
   if (opts.rerank === "cross_encoder") {
-    const { crossEncoderRerank } = await import("./rerank");
     const reranked = await crossEncoderRerank(
       query,
       hydrated as unknown as Parameters<typeof crossEncoderRerank>[1],
@@ -123,7 +125,6 @@ export async function hybridSearch(
   }
 
   if (opts.rerank === "mmr") {
-    const { mmrRerank } = await import("./mmr");
     return mmrRerank(
       hydrated as unknown as Parameters<typeof mmrRerank>[0],
       rerankTopN

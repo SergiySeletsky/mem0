@@ -9,7 +9,7 @@ import { runRead, runWrite } from "@/lib/db/memgraph";
 export function getDefaultConfiguration() {
   return {
     openmemory: {} as {
-      dedup?: { enabled?: boolean; threshold?: number; azureThreshold?: number };
+      dedup?: { enabled?: boolean; threshold?: number; azureThreshold?: number; intelliThreshold?: number };
       context_window?: { enabled?: boolean; size?: number };
       [key: string]: unknown;
     },
@@ -81,8 +81,9 @@ export function deepUpdate(source: Record<string, unknown>, overrides: Record<st
 
 export interface DedupConfig {
   enabled: boolean;
-  threshold: number;      // cosine similarity threshold 0–1 (default provider)
-  azureThreshold: number; // Azure-specific threshold (lower: supSim=0.613 on text-embedding-3-small)
+  threshold: number;        // cosine similarity threshold 0–1 (default provider)
+  azureThreshold: number;   // Azure-specific threshold (lower: supSim=0.613 on text-embedding-3-small)
+  intelliThreshold: number; // intelli-embed-v3-specific threshold (supSim=0.580)
 }
 
 /**
@@ -101,9 +102,10 @@ export async function getDedupConfig(): Promise<DedupConfig> {
       enabled: dedupCfg.enabled ?? true,
       threshold: dedupCfg.threshold ?? 0.75,
       azureThreshold: dedupCfg.azureThreshold ?? 0.55,
+      intelliThreshold: dedupCfg.intelliThreshold ?? 0.55,
     };
   } catch {
-    return { enabled: true, threshold: 0.75, azureThreshold: 0.55 };
+    return { enabled: true, threshold: 0.75, azureThreshold: 0.55, intelliThreshold: 0.55 };
   }
 }
 

@@ -75,14 +75,16 @@ export async function categorizeMemory(
       (CATEGORIES as readonly string[]).includes(c)
     );
 
-    for (const name of valid) {
-      await runWrite(
-        `MATCH (m:Memory {id: $memId})
-         MERGE (c:Category {name: $name})
-         MERGE (m)-[:HAS_CATEGORY]->(c)`,
-        { memId: memoryId, name }
-      );
-    }
+    if (valid.length === 0) return;
+
+    // Single UNWIND write — avoids N sequential round-trips (was: for-loop await runWrite)
+    await runWrite(
+      `MATCH (m:Memory {id: $memId})
+       UNWIND $names AS name
+       MERGE (c:Category {name: name})
+       MERGE (m)-[:HAS_CATEGORY]->(c)`,
+      { memId: memoryId, names: valid }
+    );
   } catch (e) {
     console.warn("[categorize] failed for memory", memoryId, e);
   }

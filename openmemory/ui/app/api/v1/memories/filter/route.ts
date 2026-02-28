@@ -45,6 +45,13 @@ export async function POST(request: NextRequest) {
   const whereParts: string[] = [];
   const queryParams: Record<string, unknown> = { userId: user_id, skip, limit: pageSize };
 
+  // Spec 01: always exclude superseded (bi-temporal) memories unless caller explicitly
+  // requests historical data. supersedeMemory() sets invalidAt but keeps state='active',
+  // so a state filter alone is insufficient.
+  if (!showArchived) {
+    whereParts.push("m.invalidAt IS NULL");
+  }
+
   // State filter
   if (stateFilter) {
     whereParts.push("m.state = $state");

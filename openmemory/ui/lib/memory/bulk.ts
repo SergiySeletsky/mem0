@@ -16,6 +16,7 @@ import { embedBatch } from "@/lib/embeddings/openai";
 import { runWrite } from "@/lib/db/memgraph";
 import { checkDeduplication } from "@/lib/dedup";
 import { processEntityExtraction } from "@/lib/entities/worker";
+import { categorizeMemory } from "@/lib/memory/categorize";
 import { Semaphore } from "@/lib/mem0/semaphore";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -29,6 +30,7 @@ export interface BulkMemoryInput {
 
 export interface BulkAddOptions {
   userId: string;
+  /** App name to attach memories to via [:CREATED_BY]->(App). Defaults to "openmemory". */
   appName?: string;
   /** Max parallel dedup checks. Defaults to min(5, floor(RPM/20)). */
   concurrency?: number;
@@ -67,6 +69,7 @@ export async function bulkAddMemories(
 ): Promise<BulkMemoryResult[]> {
   const {
     userId,
+    appName = "openmemory",
     concurrency = getMaxConcurrency(),
     dedupEnabled = true,
     onProgress,
@@ -152,11 +155,14 @@ export async function bulkAddMemories(
     origIdx,
   }));
 
-  // Ensure user node exists in Memgraph (idempotent MERGE)
+  // Ensure user node + App node exist in Memgraph (idempotent MERGE)
   const userNow = new Date().toISOString();
   await runWrite(
-    `MERGE (u:User {userId: $userId}) ON CREATE SET u.createdAt = $userNow`,
-    { userId, userNow }
+    `MERGE (u:User {userId: $userId}) ON CREATE SET u.createdAt = $userNow
+     WITH u
+     MERGE (u)-[:HAS_APP]->(a:App {appName: $appName})
+     ON CREATE SET a.id = randomUUID(), a.createdAt = $userNow, a.isActive = true`,
+    { userId, userNow, appName }
   );
 
   // ── Stage 5: Single UNWIND + CREATE transaction ───────────────────────
@@ -168,6 +174,7 @@ export async function bulkAddMemories(
     `
     UNWIND $memories AS mem
     MATCH (u:User {userId: $userId})
+    MATCH (u)-[:HAS_APP]->(a:App {appName: $appName})
     CREATE (m:Memory {
       id:                  mem.id,
       content:             mem.content,
@@ -179,8 +186,9 @@ export async function bulkAddMemories(
       extractionAttempts:  0
     })
     CREATE (u)-[:HAS_MEMORY]->(m)
+    CREATE (m)-[:CREATED_BY]->(a)
     `,
-    { memories: writeNodes, userId }
+    { memories: writeNodes, userId, appName }
   );
 
   // ── Stage 6: Update results + fire-and-forget entity extraction ───────
@@ -196,6 +204,9 @@ export async function bulkAddMemories(
     onProgress?.(completed, items.length);
     processEntityExtraction(mem.id).catch((e) =>
       console.warn("[bulk entity worker]", e)
+    );
+    categorizeMemory(mem.id, items[mem.origIdx].text).catch((e) =>
+      console.warn("[bulk categorize]", e)
     );
   }
 

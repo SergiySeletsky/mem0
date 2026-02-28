@@ -26,6 +26,11 @@ jest.mock("@/lib/memory/categorize", () => ({
   categorizeMemory: (...args: unknown[]) => mockCategorize(...args),
 }));
 
+const mockAddHistory = jest.fn();
+jest.mock("@/lib/memory/history", () => ({
+  addHistory: (...args: unknown[]) => mockAddHistory(...args),
+}));
+
 jest.mock("@/lib/config/helpers", () => ({
   getContextWindowConfig: jest.fn().mockResolvedValue({ enabled: false, size: 0 }),
 }));
@@ -51,6 +56,7 @@ beforeEach(() => {
   mockRunWrite.mockResolvedValue([]);
   mockRunRead.mockResolvedValue([]);
   mockCategorize.mockResolvedValue(undefined);
+  mockAddHistory.mockResolvedValue(undefined);
 });
 
 // ==========================================================================
@@ -218,6 +224,47 @@ describe("supersedeMemory", () => {
     mockCategorize.mockRejectedValue(new Error("boom"));
     const id = await supersedeMemory("old-id", "new", "u1");
     expect(typeof id).toBe("string");
+  });
+
+  test("WR_34: tag inheritance — fetches old tags via runRead when tags param omitted", async () => {
+    // Old memory has tags — they should be inherited into the new node
+    mockRunRead.mockResolvedValueOnce([{ tags: ["session-17", "production"] }]);
+
+    await supersedeMemory("old-id", "new content", "u1");
+
+    // runRead must have been called exactly once (to fetch old tags)
+    expect(mockRunRead).toHaveBeenCalledTimes(1);
+    const readCypher = mockRunRead.mock.calls[0][0] as string;
+    expect(readCypher).toContain("m.tags");
+    expect(readCypher).toContain("User {userId: $userId}");
+
+    // runWrite must include the inherited tags as param
+    expect(mockRunWrite).toHaveBeenCalledTimes(1);
+    const writeParams = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
+    expect(writeParams.tags).toEqual(["session-17", "production"]);
+  });
+
+  test("WR_35: explicit tags bypass tag-inheritance runRead", async () => {
+    // When caller provides tags explicitly, no runRead should occur
+    await supersedeMemory("old-id", "new content", "u1", undefined, ["explicit-tag"]);
+
+    // runRead must NOT have been called (we skip the tag fetch entirely)
+    expect(mockRunRead).not.toHaveBeenCalled();
+
+    // runWrite must write the explicitly provided tags
+    expect(mockRunWrite).toHaveBeenCalledTimes(1);
+    const writeParams = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
+    expect(writeParams.tags).toEqual(["explicit-tag"]);
+  });
+
+  test("WR_36: tag inheritance falls back to empty array when old node has no tags", async () => {
+    // Old memory row has no tags property (undefined) — should default to []
+    mockRunRead.mockResolvedValueOnce([{}]);
+
+    await supersedeMemory("old-id", "no tags", "u1");
+
+    const writeParams = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
+    expect(writeParams.tags).toEqual([]);
   });
 });
 

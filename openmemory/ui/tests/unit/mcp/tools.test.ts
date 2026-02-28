@@ -208,7 +208,31 @@ describe("MCP Tool Handlers — add_memories", () => {
     const parsed = parseToolResult(result as any) as any;
     expect(parsed.results[0].event).toBe("SUPERSEDE");
     expect(parsed.results[0].id).toBe("superseded-id");
-    expect(mockSupersedeMemory).toHaveBeenCalledWith("old-id", "Updated preference", "test-user", "test-client");
+    expect(mockSupersedeMemory).toHaveBeenCalledWith("old-id", "Updated preference", "test-user", "test-client", undefined);
+  });
+
+  it("MCP_TAG_SUPERSEDE: supersede path forwards explicit tags as 5th arg to supersedeMemory (WRITE-04)", async () => {
+    // When caller provides tags alongside content that triggers a SUPERSEDE,
+    // those tags must be forwarded to supersedeMemory so the new node inherits them.
+    mockCheckDeduplication.mockResolvedValueOnce({
+      action: "supersede",
+      existingId: "old-tagged-id",
+    } as any);
+    mockSupersedeMemory.mockResolvedValueOnce("new-tagged-id");
+    mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
+
+    await client.callTool({
+      name: "add_memories",
+      arguments: { content: "Updated pref with tags", tags: ["myTag", "project-alpha"] },
+    });
+
+    expect(mockSupersedeMemory).toHaveBeenCalledWith(
+      "old-tagged-id",
+      "Updated pref with tags",
+      "test-user",
+      "test-client",
+      ["myTag", "project-alpha"]
+    );
   });
 
   it("MCP_ADD_04: fires entity extraction asynchronously", async () => {
@@ -328,15 +352,14 @@ describe("MCP Tool Handlers — add_memories", () => {
     expect(parsed.results[0].event).toBe("ADD");
     expect(parsed.results[0].id).toBe("cat-mem-id");
 
-    // runWrite should have been called for each explicit category
+    // runWrite should have been called once for all explicit categories (UNWIND batch)
     const categoryWriteCalls = mockRunWrite.mock.calls.filter(
       (call) => typeof call[0] === "string" && (call[0] as string).includes("HAS_CATEGORY")
     );
-    expect(categoryWriteCalls).toHaveLength(2);
-    // Verify category names match what was passed
-    const catNames = categoryWriteCalls.map((c) => (c[1] as Record<string, unknown>).name);
-    expect(catNames).toContain("Technology");
-    expect(catNames).toContain("Work");
+    expect(categoryWriteCalls).toHaveLength(1);
+    // Verify category names match what was passed via UNWIND $categories
+    const catNames = (categoryWriteCalls[0][1] as Record<string, unknown>).categories;
+    expect(catNames).toEqual(["Technology", "Work"]);
   });
 
   it("MCP_ADD_10: no categories param — no explicit category writes (LLM handles it)", async () => {
@@ -447,6 +470,9 @@ describe("MCP Tool Handlers — search_memory", () => {
     expect(mockRunWrite).toHaveBeenCalledTimes(1);
     const accessCypher = mockRunWrite.mock.calls[0][0] as string;
     expect(accessCypher).toContain("ACCESSED");
+    // ACCESS-LOG-01 fix: must use MERGE (not CREATE) to avoid duplicate edges + track accessCount
+    expect(accessCypher.toUpperCase()).toContain("MERGE");
+    expect(accessCypher).toContain("accessCount");
   });
 
   it("MCP_SM_05: includes confident:true when BM25 matches exist", async () => {
@@ -515,6 +541,53 @@ describe("MCP Tool Handlers — search_memory", () => {
     expect(parsed.message).toContain("No results found");
     expect(parsed.results).toHaveLength(0);
   });
+
+  it("MCP_FILTER_FETCH_01: fetches 3× limit candidates when category filter active (MCP-FILTER-01)", async () => {
+    // With limit=5 and a category filter, hybridSearch topK must be 15 (5 × 3)
+    mockHybridSearch.mockResolvedValueOnce([]);
+    mockRunWrite.mockResolvedValueOnce([]);
+
+    await client.callTool({
+      name: "search_memory",
+      arguments: { query: "find me something", category: "technology", limit: 5 },
+    });
+
+    expect(mockHybridSearch).toHaveBeenCalledWith(
+      "find me something",
+      expect.objectContaining({ topK: 15 })
+    );
+  });
+
+  it("MCP_FILTER_FETCH_02: fetches 3× limit candidates when tag filter active (MCP-FILTER-01)", async () => {
+    mockHybridSearch.mockResolvedValueOnce([]);
+    mockRunWrite.mockResolvedValueOnce([]);
+
+    await client.callTool({
+      name: "search_memory",
+      arguments: { query: "tagged query", tag: "session-42", limit: 4 },
+    });
+
+    expect(mockHybridSearch).toHaveBeenCalledWith(
+      "tagged query",
+      expect.objectContaining({ topK: 12 })
+    );
+  });
+
+  it("MCP_FILTER_FETCH_03: uses exact limit as topK when no post-filters active (MCP-FILTER-01)", async () => {
+    // Without filters, fetchLimit === effectiveLimit (no 3× overhead)
+    mockHybridSearch.mockResolvedValueOnce([]);
+    mockRunWrite.mockResolvedValueOnce([]);
+
+    await client.callTool({
+      name: "search_memory",
+      arguments: { query: "plain query", limit: 7 },
+    });
+
+    expect(mockHybridSearch).toHaveBeenCalledWith(
+      "plain query",
+      expect.objectContaining({ topK: 7 })
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -531,10 +604,9 @@ describe("MCP Tool Handlers — search_memory (browse mode)", () => {
 
   it("MCP_SM_BROWSE_01: no query returns paginated shape { total, offset, limit, results }", async () => {
     mockRunRead
-      .mockResolvedValueOnce([{ total: 3 }])
       .mockResolvedValueOnce([
-        { id: "m1", content: "Memory one", createdAt: "2026-01-01", updatedAt: "2026-01-01", categories: ["work"] },
-        { id: "m2", content: "Memory two", createdAt: "2026-01-02", updatedAt: "2026-01-02", categories: [] },
+        { id: "m1", content: "Memory one", createdAt: "2026-01-01", updatedAt: "2026-01-01", categories: ["work"], total: 3 },
+        { id: "m2", content: "Memory two", createdAt: "2026-01-02", updatedAt: "2026-01-02", categories: [], total: 3 },
       ]);
 
     const result = await client.callTool({
@@ -557,9 +629,8 @@ describe("MCP Tool Handlers — search_memory (browse mode)", () => {
 
   it("MCP_SM_BROWSE_02: offset parameter forwarded to SKIP clause", async () => {
     mockRunRead
-      .mockResolvedValueOnce([{ total: 10 }])
       .mockResolvedValueOnce([
-        { id: "m6", content: "Memory six", createdAt: "2026-01-06", updatedAt: "2026-01-06", categories: [] },
+        { id: "m6", content: "Memory six", createdAt: "2026-01-06", updatedAt: "2026-01-06", categories: [], total: 10 },
       ]);
 
     const result = await client.callTool({
@@ -571,14 +642,13 @@ describe("MCP Tool Handlers — search_memory (browse mode)", () => {
     expect(parsed.offset).toBe(5);
     expect(parsed.limit).toBe(1);
 
-    const paginationCypher = mockRunRead.mock.calls[1][0] as string;
-    expect(paginationCypher).toContain("SKIP");
-    expect(paginationCypher).toContain("LIMIT");
+    const paginationCypher = mockRunRead.mock.calls[0][0] as string;
+    expect(paginationCypher).toContain("$offset");
+    expect(paginationCypher).toContain("$limit");
   });
 
   it("MCP_SM_BROWSE_03: clamps limit to max 200", async () => {
     mockRunRead
-      .mockResolvedValueOnce([{ total: 0 }])
       .mockResolvedValueOnce([]);
 
     const result = await client.callTool({
@@ -592,9 +662,8 @@ describe("MCP Tool Handlers — search_memory (browse mode)", () => {
 
   it("MCP_SM_BROWSE_04: results include categories per memory", async () => {
     mockRunRead
-      .mockResolvedValueOnce([{ total: 1 }])
       .mockResolvedValueOnce([
-        { id: "m1", content: "Test", createdAt: "2026-01-01", updatedAt: "2026-01-01", categories: ["architecture", "decisions"] },
+        { id: "m1", content: "Test", createdAt: "2026-01-01", updatedAt: "2026-01-01", categories: ["architecture", "decisions"], total: 1 },
       ]);
 
     const result = await client.callTool({
@@ -605,16 +674,15 @@ describe("MCP Tool Handlers — search_memory (browse mode)", () => {
     const parsed = parseToolResult(result as any) as any;
     expect(parsed.results[0].categories).toEqual(["architecture", "decisions"]);
 
-    const cypher = mockRunRead.mock.calls[1][0] as string;
+    const cypher = mockRunRead.mock.calls[0][0] as string;
     expect(cypher).toContain("HAS_CATEGORY");
     expect(cypher).toContain("Category");
   });
 
   it("MCP_SM_BROWSE_05: category filter applied in browse mode", async () => {
     mockRunRead
-      .mockResolvedValueOnce([{ total: 1 }])
       .mockResolvedValueOnce([
-        { id: "m1", content: "Test", createdAt: "2026-01-01", updatedAt: "2026-01-01", categories: ["security"] },
+        { id: "m1", content: "Test", createdAt: "2026-01-01", updatedAt: "2026-01-01", categories: ["security"], total: 1 },
       ]);
 
     const result = await client.callTool({
@@ -625,18 +693,15 @@ describe("MCP Tool Handlers — search_memory (browse mode)", () => {
     const parsed = parseToolResult(result as any) as any;
     expect(parsed.results).toHaveLength(1);
 
-    const countCypher = mockRunRead.mock.calls[0][0] as string;
-    expect(countCypher).toContain("toLower(cFilter.name) = toLower($category)");
-    const listCypher = mockRunRead.mock.calls[1][0] as string;
-    expect(listCypher).toContain("toLower(cFilter.name) = toLower($category)");
+    const cypher = mockRunRead.mock.calls[0][0] as string;
+    expect(cypher).toContain("toLower(cFilter.name) = toLower($category)");
   });
 
   it("MCP_SM_BROWSE_06: empty string query also triggers browse mode", async () => {
     mockRunRead
-      .mockResolvedValueOnce([{ total: 2 }])
       .mockResolvedValueOnce([
-        { id: "m1", content: "A", createdAt: "2026-01-01", updatedAt: "2026-01-01", categories: [] },
-        { id: "m2", content: "B", createdAt: "2026-01-02", updatedAt: "2026-01-02", categories: [] },
+        { id: "m1", content: "A", createdAt: "2026-01-01", updatedAt: "2026-01-01", categories: [], total: 2 },
+        { id: "m2", content: "B", createdAt: "2026-01-02", updatedAt: "2026-01-02", categories: [], total: 2 },
       ]);
 
     const result = await client.callTool({
@@ -958,12 +1023,12 @@ describe("MCP Tool Handlers — tags support", () => {
       expect.objectContaining({ tags: ["audit-17", "ux"] })
     );
 
-    // runWrite called with SET m.tags patch
+    // On ADD path, tags are passed directly to addMemory (no separate SET m.tags patch needed).
+    // The SET m.tags patch only fires on the SUPERSEDE path.
     const tagWriteCalls = mockRunWrite.mock.calls.filter(
       (c) => typeof c[0] === "string" && (c[0] as string).includes("SET m.tags")
     );
-    expect(tagWriteCalls).toHaveLength(1);
-    expect((tagWriteCalls[0][1] as Record<string, unknown>).tags).toEqual(["audit-17", "ux"]);
+    expect(tagWriteCalls).toHaveLength(0);
   });
 
   it("MCP_TAG_02: search_memory(tag) filters hybrid results to only matching tag (case-insensitive)", async () => {
@@ -987,9 +1052,8 @@ describe("MCP Tool Handlers — tags support", () => {
 
   it("MCP_TAG_03: browse mode with tag passes tag to runRead and includes tag clause in Cypher", async () => {
     mockRunRead
-      .mockResolvedValueOnce([{ total: 1 }])
       .mockResolvedValueOnce([
-        { id: "m1", content: "Test mem", createdAt: "2026-01-01", updatedAt: "2026-01-01", categories: [] },
+        { id: "m1", content: "Test mem", createdAt: "2026-01-01", updatedAt: "2026-01-01", categories: [], total: 1 },
       ]);
 
     const result = await client.callTool({
@@ -1001,22 +1065,17 @@ describe("MCP Tool Handlers — tags support", () => {
     expect(parsed).toHaveProperty("total", 1);
     expect(parsed.results).toHaveLength(1);
 
-    // Count query params must include tag
-    const countParams = mockRunRead.mock.calls[0][1] as Record<string, unknown>;
-    expect(countParams).toHaveProperty("tag", "session-17");
+    // Single combined query — params must include tag
+    const queryParams = mockRunRead.mock.calls[0][1] as Record<string, unknown>;
+    expect(queryParams).toHaveProperty("tag", "session-17");
 
-    // Count query Cypher must filter by tag
-    const countCypher = mockRunRead.mock.calls[0][0] as string;
-    expect(countCypher).toContain("toLower($tag)");
-
-    // List query params must also include tag
-    const listParams = mockRunRead.mock.calls[1][1] as Record<string, unknown>;
-    expect(listParams).toHaveProperty("tag", "session-17");
+    // Cypher must filter by tag
+    const queryCypher = mockRunRead.mock.calls[0][0] as string;
+    expect(queryCypher).toContain("toLower($tag)");
   });
 
   it("MCP_BROWSE_NO_UNDEF_PARAMS: browse without tag/category — no undefined keys in runRead params", async () => {
     mockRunRead
-      .mockResolvedValueOnce([{ total: 0 }])
       .mockResolvedValueOnce([]);
 
     await client.callTool({
