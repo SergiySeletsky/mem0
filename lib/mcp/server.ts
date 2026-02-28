@@ -108,7 +108,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
       // Normalise to array -- accepts a single string for backward compatibility
       const items: string[] = Array.isArray(content) ? content : [content];
       if (items.length === 0) {
-        return { content: [{ type: "text", text: JSON.stringify({ results: [] }) }] };
+        return { content: [{ type: "text", text: JSON.stringify({}) }] };
       }
 
       const t0 = Date.now();
@@ -255,8 +255,40 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
 
         console.log(`[MCP] add_memories done in ${Date.now() - t0}ms batch=${items.length}`);
 
+        // ── Minimal response ──
+        // Only non-zero counts + ids for stored items + index-correlated errors.
+        // Caller already has the input text — no echo, no per-item objects.
+        const response: Record<string, unknown> = {};
+
+        const addIds = results.filter(r => r.event === "ADD").map(r => r.id);
+        const supersedeIds = results.filter(r => r.event === "SUPERSEDE").map(r => r.id);
+        const ids = [...addIds, ...supersedeIds].filter(Boolean);
+        if (ids.length) response.ids = ids;
+
+        if (addIds.length) response.stored = addIds.length;
+        if (supersedeIds.length) response.superseded = supersedeIds.length;
+
+        const skippedCount = results.filter(r => r.event === "SKIP_DUPLICATE").length;
+        if (skippedCount) response.skipped = skippedCount;
+
+        // Errors carry index so caller can correlate which input failed
+        const errors = results
+          .map((r, i) => r.event === "ERROR" ? { index: i, message: (r as any).error } : null)
+          .filter(Boolean);
+        if (errors.length) response.errors = errors;
+
+        // Invalidate: just a count of invalidated memories
+        const invalidatedCount = results
+          .filter(r => r.event === "INVALIDATE")
+          .reduce((sum, r) => sum + ((r as any).invalidated?.length ?? 0), 0);
+        if (invalidatedCount) response.invalidated = invalidatedCount;
+
+        // Delete entity: name of the deleted entity
+        const deletedEntity = results.find(r => r.event === "DELETE_ENTITY");
+        if (deletedEntity) response.deleted = (deletedEntity as any).deleted?.entity ?? null;
+
         return {
-          content: [{ type: "text", text: JSON.stringify({ results }) }],
+          content: [{ type: "text", text: JSON.stringify(response) }],
         };
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);

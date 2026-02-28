@@ -168,10 +168,9 @@ describe("MCP Tool Handlers — add_memories", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.results).toHaveLength(1);
-    expect(parsed.results[0].id).toBe("new-mem-id");
-    expect(parsed.results[0].memory).toBe("Alice prefers TypeScript");
-    expect(parsed.results[0].event).toBe("ADD");
+    expect(parsed.stored).toBe(1);
+    expect(parsed.ids).toEqual(["new-mem-id"]);
+    expect(parsed).not.toHaveProperty("results"); // no per-item array
     expect(mockAddMemory).toHaveBeenCalledTimes(1);
   });
 
@@ -187,8 +186,8 @@ describe("MCP Tool Handlers — add_memories", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.results[0].event).toBe("SKIP_DUPLICATE");
-    expect(parsed.results[0].id).toBe("existing-id");
+    expect(parsed.skipped).toBe(1);
+    expect(parsed).not.toHaveProperty("ids");
     expect(mockAddMemory).not.toHaveBeenCalled();
   });
 
@@ -206,8 +205,8 @@ describe("MCP Tool Handlers — add_memories", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.results[0].event).toBe("SUPERSEDE");
-    expect(parsed.results[0].id).toBe("superseded-id");
+    expect(parsed.superseded).toBe(1);
+    expect(parsed.ids).toEqual(["superseded-id"]);
     expect(mockSupersedeMemory).toHaveBeenCalledWith("old-id", "Updated preference", "test-user", "test-client", undefined);
   });
 
@@ -266,9 +265,8 @@ describe("MCP Tool Handlers — add_memories", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.results).toHaveLength(3);
-    expect(parsed.results.map((r: any) => r.id)).toEqual(["id-1", "id-2", "id-3"]);
-    expect(parsed.results.every((r: any) => r.event === "ADD")).toBe(true);
+    expect(parsed.stored).toBe(3);
+    expect(parsed.ids).toEqual(["id-1", "id-2", "id-3"]);
     expect(mockAddMemory).toHaveBeenCalledTimes(3);
     expect(mockProcessEntityExtraction).toHaveBeenCalledTimes(3);
   });
@@ -289,11 +287,9 @@ describe("MCP Tool Handlers — add_memories", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.results).toHaveLength(3);
-    expect(parsed.results[0].event).toBe("ADD");
-    expect(parsed.results[1].event).toBe("ERROR");
-    expect(parsed.results[1].error).toBe("DB timeout");
-    expect(parsed.results[2].event).toBe("ADD");
+    expect(parsed.stored).toBe(2);
+    expect(parsed.ids).toEqual(["ok-id-1", "ok-id-3"]);
+    expect(parsed.errors).toEqual([{ index: 1, message: "DB timeout" }]);
   });
 
   it("MCP_ADD_07: empty array returns { results: [] } immediately", async () => {
@@ -303,7 +299,7 @@ describe("MCP Tool Handlers — add_memories", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.results).toEqual([]);
+    expect(parsed).toEqual({});
     expect(mockCheckDeduplication).not.toHaveBeenCalled();
     expect(mockAddMemory).not.toHaveBeenCalled();
   });
@@ -323,12 +319,10 @@ describe("MCP Tool Handlers — add_memories", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.results[0].event).toBe("ADD");
-    expect(parsed.results[0].id).toBe("new-id");
-    expect(parsed.results[1].event).toBe("SKIP_DUPLICATE");
-    expect(parsed.results[1].id).toBe("dup-id");
-    expect(parsed.results[2].event).toBe("SUPERSEDE");
-    expect(parsed.results[2].id).toBe("supersede-id");
+    expect(parsed.stored).toBe(1);
+    expect(parsed.superseded).toBe(1);
+    expect(parsed.skipped).toBe(1);
+    expect(parsed.ids).toEqual(["new-id", "supersede-id"]);
     // entity extraction only for ADD and SUPERSEDE items
     expect(mockProcessEntityExtraction).toHaveBeenCalledTimes(2);
   });
@@ -348,9 +342,8 @@ describe("MCP Tool Handlers — add_memories", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.results).toHaveLength(1);
-    expect(parsed.results[0].event).toBe("ADD");
-    expect(parsed.results[0].id).toBe("cat-mem-id");
+    expect(parsed.stored).toBe(1);
+    expect(parsed.ids).toEqual(["cat-mem-id"]);
 
     // runWrite should have been called once for all explicit categories (UNWIND batch)
     const categoryWriteCalls = mockRunWrite.mock.calls.filter(
@@ -373,7 +366,7 @@ describe("MCP Tool Handlers — add_memories", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.results[0].event).toBe("ADD");
+    expect(parsed.stored).toBe(1);
 
     // No explicit runWrite calls for categories (LLM categorizer is inside addMemory, not mocked here)
     const categoryWriteCalls = mockRunWrite.mock.calls.filter(
@@ -750,9 +743,8 @@ describe("MCP Tool Handlers -- add_memories intent classification", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.results).toHaveLength(1);
-    expect(parsed.results[0].event).toBe("INVALIDATE");
-    expect(parsed.results[0].invalidated).toHaveLength(2);
+    expect(parsed.invalidated).toBe(2);
+    expect(parsed).not.toHaveProperty("ids");
     expect(mockInvalidateMemories).toHaveBeenCalledWith(
       "Alice's phone number",
       "test-user"
@@ -778,10 +770,8 @@ describe("MCP Tool Handlers -- add_memories intent classification", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.results).toHaveLength(1);
-    expect(parsed.results[0].event).toBe("DELETE_ENTITY");
-    expect(parsed.results[0].deleted).toBeDefined();
-    expect(parsed.results[0].deleted.entity).toBe("Alice");
+    expect(parsed.deleted).toBe("Alice");
+    expect(parsed).not.toHaveProperty("ids");
     expect(mockDeleteEntity).toHaveBeenCalledWith(
       "test-user",
       undefined,
@@ -802,10 +792,9 @@ describe("MCP Tool Handlers -- add_memories intent classification", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.results).toHaveLength(1);
     // Should fall back to STORE when classifier throws
-    expect(parsed.results[0].event).toBe("ADD");
-    expect(parsed.results[0].id).toBe("stored-id");
+    expect(parsed.stored).toBe(1);
+    expect(parsed.ids).toEqual(["stored-id"]);
     expect(mockAddMemory).toHaveBeenCalled();
   });
 });
@@ -926,9 +915,8 @@ describe("MCP add_memories -- extraction drain (Tantivy concurrency prevention)"
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.results).toHaveLength(2);
-    expect(parsed.results[0].id).toBe("id-1");
-    expect(parsed.results[1].id).toBe("id-2");
+    expect(parsed.stored).toBe(2);
+    expect(parsed.ids).toEqual(["id-1", "id-2"]);
 
     // extraction-1-done must appear before addMemory-2 in the execution order
     const ext1DoneIdx = execOrder.indexOf("extraction-1-done");
@@ -971,9 +959,8 @@ describe("MCP add_memories -- extraction drain (Tantivy concurrency prevention)"
     const parsed = parseToolResult(result as any) as any;
 
     // Both items must have been processed (batch didn't hang)
-    expect(parsed.results).toHaveLength(2);
-    expect(parsed.results[0].id).toBe("id-1");
-    expect(parsed.results[1].id).toBe("id-2");
+    expect(parsed.stored).toBe(2);
+    expect(parsed.ids).toEqual(["id-1", "id-2"]);
     // The extraction was NOT yet resolved (we only advanced 3.1 s, timeout is 10 s)
     expect(hangResolved).toBe(false);
 
@@ -1014,8 +1001,8 @@ describe("MCP Tool Handlers — tags support", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    expect(parsed.results[0].event).toBe("ADD");
-    expect(parsed.results[0].id).toBe("tag-mem-id");
+    expect(parsed.stored).toBe(1);
+    expect(parsed.ids).toEqual(["tag-mem-id"]);
 
     // addMemory called with tags in opts
     expect(mockAddMemory).toHaveBeenCalledWith(
@@ -1149,11 +1136,8 @@ describe("MCP add_memories — global drain budget (MCP-02)", () => {
     const parsed = parseToolResult(result as any) as any;
 
     // All 5 items processed — global budget exhaustion must not block
-    expect(parsed.results).toHaveLength(5);
-    expect(parsed.results.every((r: any) => r.event === "ADD")).toBe(true);
-    expect(parsed.results.map((r: any) => r.id)).toEqual([
-      "id-1", "id-2", "id-3", "id-4", "id-5",
-    ]);
+    expect(parsed.stored).toBe(5);
+    expect(parsed.ids).toEqual(["id-1", "id-2", "id-3", "id-4", "id-5"]);
 
     jest.useRealTimers();
   });

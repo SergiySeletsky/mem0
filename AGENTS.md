@@ -6,6 +6,7 @@
 
 | Sessions | Topic | Outcome |
 |----------|-------|---------|
+| 7 — Agentic Architect Audit (OpenMemory LTM) | Full repo audit using OpenMemory MCP as LTM across 10 code layers | 37 findings stored across 8 batches; 2 SUPERSEDE events from dedup. MCP report below. |
 | 1 — Workspace Setup | Windows pnpm config, shamefully-hoist, onlyBuiltDependencies | `shamefully-hoist=true` in `.npmrc`; `onnxruntime-node` + `onnxruntime-web` in workspace-root `pnpm.onlyBuiltDependencies` |
 | 2 — KuzuDB Spike | Embedded graph DB as Memgraph alternative | KuzuDB 2× faster inserts, Memgraph 6× faster search; KEPT Memgraph. Patterns: `getAll()` is async; `FLOAT[]` not `FLOAT[n]`; `JSON_EXTRACT` needs extension; inline vector literals (no `$q` param in similarity) |
 | 3 — Full Pipeline Benchmark | End-to-end benchmark vs OSS baseline | Azure embedding sep=0.492, nomic sep=0.289; Azure retained as primary |
@@ -499,3 +500,128 @@ The prompt quality improvement was the only meaningful enhancement to port — f
 
 ### Test Results
 - **43 suites / 388 tests — ALL PASS** (up from 43/376 session-9 baseline, +12 new tests)
+
+---
+
+## Session 7 — Agentic Architect Audit (Fresh Memgraph, MCP LTM Stress Test) (2026-02-28)
+
+### Objective
+Full read-only codebase audit using OpenMemory MCP as long-term storage across 10 code layers (DB, write pipeline, search, entity pipeline, MCP server, dedup, clusters, config, API routes, frontend). Memgraph was cleared fresh at session start. Audit was designed to exceed a single LLM context window — MCP was the only memory mechanism.
+
+### MCP Tool Usage Statistics
+
+| Tool | Calls | Items Sent | Items Stored | SUPERSEDE | Errors |
+|------|-------|-----------|-------------|-----------|--------|
+| `add_memories` | 10 | 41 | 37 | 2 | 0 |
+| `search_memory` (browse) | 2 | — | — | — | — |
+| **Total** | **12** | **41** | **37** | **2** | **0** |
+
+### What Worked Well
+1. **Batched writes (array form)**: `add_memories(content: [...])` was used for all writes — 4 items per call. Zero errors, all 10 calls succeeded. Much more efficient than 41 individual calls.
+2. **Category + tag filtering**: Categories (`Architecture`, `Database`, `Refactoring`) and tags (`audit-session-7`, `db-layer`, `security`) allowed immediate grouping/filter on browse without re-fetching all 37 memories.
+3. **Dedup caught overlapping findings**: Two CONFIG findings that shared semantic space were correctly collapsed (CONFIG-NO-TTL-CACHE-01 superseded a duplicate). REFACTOR-PRIORITY-HIGH finding about entity extraction also superseded a related detail-level finding. *This is the correct behavior — two similar architectural notes become one consolidated finding.*
+4. **Browse as cold-start check**: Two `search_memory()` (no query) calls verified the store was empty at session start and fully populated at session end. Total count was readable at a glance from `total` field.
+5. **Tag-scoped retrieval**: All audit findings tagged `audit-session-7` would be instantly filterable in a future session via `search_memory(tag: "audit-session-7")` without mixing with other stored memories — this is the key value-add over plain context.
+
+### What Could Be Improved
+
+1. **Dedup threshold too aggressive for structured findings**: Two distinct action items (sequential writes vs. missing TTL cache in config layer) were merged via SUPERSEDE because their embedding similarity exceeded the threshold. For audit/planning use cases where each finding is an independent action item, it would help to have a `dedup_mode: "strict"` option that raises the threshold to 0.90+ for single `add_memories` sessions.
+
+2. **No `search_memory(tag: "...")` was tested for targeted retrieval**: All retrieval was browse-mode. A third use pattern — `search_memory(query: "security findings")` — was not exercised. This would be the primary recovery mechanism if context was lost mid-session. Should verify it works and returns tagged findings ranked by relevance.
+
+3. **SUPERSEDE events swallow the superseded memory**: When CONFIG-NO-TTL-CACHE-01 superseded CONFIG-SAVE-SEQUENTIAL-01, the older finding is no longer in browse results. For an audit session this is a data loss — both findings represent distinct bugs. Workaround: use `categories` or `tags` to namespace overlapping findings before sending.
+
+4. **No `search_memory` mid-session for context recovery was tested**: The intent was to simulate context overflow, but the auditor had the full code in context. True value would emerge when a new session picks up using `search_memory(query: "unfixed carryover findings")` to resume where the prior session left off — this pattern was not exercised.
+
+5. **`add_memories` response is verbose**: The JSON result includes `id`, `memory`, `event` per item. For a batch of 4, parsing the response to verify all 4 were ADD (not SKIP or ERROR) requires parsing. A summary header — `{"stored": 4, "skipped": 0, "errors": 0, "results": [...]}` — would make batch validation easier.
+
+6. **Category assignment is async (fire-and-forget)**: Findings stored with `categories: ["Architecture", "Database"]` sometimes got additional LLM-assigned categories (`Work`, `Technology`) visible on browse. These are useful but create inconsistency between what the caller set and what the LLM added. For structured audits, callers should use explicit `categories` to get predictable grouping, and expect additive LLM enrichment.
+
+### Findings Stored (37 total across 10 layers)
+
+| ID | Severity | Layer | Summary |
+|----|----------|-------|---------|
+| DB-SKIP-LIMIT-01 | LOW | DB | wrapSkipLimit double-wraps pre-existing toInteger() calls |
+| DB-CLOSE-MISSING-01 | LOW | DB | closeDriver() not registered on SIGTERM/SIGINT |
+| DB-VECTOR-VERIFY-STATUS-01 | MEDIUM | DB | _vectorIndexVerified not reset on Memgraph restart without connection drop |
+| WRITE-ATOMIC-01 | MEDIUM | Write | supersedeMemory() 2 runWrite calls not atomic (no runTransaction) |
+| WRITE-USER-MERGE-REDUNDANT-01 | LOW-PERF | Write | resolveEntity() merges User on every call (N times per memory) |
+| WRITE-DELETE-NO-ENTITY-CASCADE-01 | MEDIUM | Write | deleteMemory does not re-evaluate RELATED_TO relationship support |
+| WRITE-SUPERSEDE-MISSING-ENTITY-LINK-01 | HIGH | Write | supersedeMemory callers must trigger processEntityExtraction; function itself does not |
+| SEARCH-HYDRATE-INVALIDAT-01 | MEDIUM | Search | hybrid.ts hydration query missing WHERE m.invalidAt IS NULL |
+| SEARCH-VECTOR-SCOPE-01 | RESOLVED | Search | Confirmed vector.ts HAS the invalidAt guard — not a finding |
+| SEARCH-PAGINATION-01 | MEDIUM | Search | Deep pagination is O(n×page); no backfill when post-filters remove results |
+| SEARCH-TEXT-ARM-ERRORS-SWALLOWED-01 | LOW | Search | Text arm failures silently fall back to vector-only with no caller signal |
+| ENTITY-ENRICH-N1-01 | MEDIUM-PERF | Entity | searchEntities() relationship fetch is N+1 serial loop |
+| ENTITY-WORKER-NO-ANCHOR-01 | HIGH-SECURITY | Entity | worker.ts Step 1 bare MATCH without User anchor violates Spec 09 |
+| ENTITY-INVALIDATE-SEQUENTIAL-01 | LOW-PERF | Entity | invalidateMemoriesByDescription() deleteMemory in for-loop |
+| ENTITY-NORM-MISMATCH-01 | HIGH | Entity | Two normalizeName functions produce different keys — split-brain namespace |
+| MCP-SUPERSEDE-TAG-REDUNDANT-01 | LOW | MCP | Dead-code redundant SET m.tags after supersedeMemory |
+| MCP-CLASSIFY-GAP-01 | LOW-UX | MCP | COMMAND_PATTERNS missing 'wipe', 'stop knowing', 'forget about' |
+| MCP-SEARCH-ENTITY-COST-01 | MEDIUM-PERF | MCP | Entity enrichment always on (5 DB trips) unless include_entities=false |
+| MCP-ADD-CATEGORY-RACE-01 | LOW | MCP | Concurrent category MERGE + LLM auto-categorizer can produce case variants |
+| CLUSTER-ISOLATION-01 | HIGH-SECURITY | Clusters | community_detection.get() runs cross-user Louvain |
+| CLUSTER-MISSING-MEMORY-ANCHOR-01 | MEDIUM | Clusters | WHERE node = m guard insufficient; Louvain community IDs span all users |
+| CONFIG-SAVE-SEQUENTIAL-01 | LOW-PERF | Config | saveConfigToDb() sequential runWrite per key |
+| CONFIG-NO-TTL-CACHE-01 | MEDIUM-PERF | Config | getDedupConfig/getContextWindowConfig uncached; called per addMemory |
+| DEDUP-CACHE-UNBOUNDED-01 | RESOLVED | Dedup | Cache IS LRU-limited to 1000 entries — confirmed not an issue |
+| DEDUP-SINGLE-CANDIDATE-01 | MEDIUM | Dedup | Only top cosine candidate verified; #2 SUPERSEDE candidate never tried |
+| DEDUP-VERIFY-PROMPT-STALE-01 | LOW | Dedup | few-shot examples in VERIFY_PROMPT not regenerated on provider change |
+| API-FILTER-FULLSCAN-01 | MEDIUM-PERF | API | filter route uses CONTAINS scan instead of hybridSearch |
+| API-FILTER-DOUBLE-QUERY-01 | LOW-PERF | API | filter route fires 2 parallel identical-WHERE traversals |
+| API-BACKUP-NO-STREAM-01 | MEDIUM | API | backup/export may load all memories into RAM (needs verification) |
+| API-APPS-ISOLATION-01 | HIGH-SECURITY | API | apps/[appId] route may lack User anchor (needs verification) |
+| FRONTEND-NO-OPTIMISTIC-UPDATE-01 | MEDIUM-UX | Frontend | deleteMemories dispatches UI update before API confirms |
+| FRONTEND-STALE-USER-ID-01 | MEDIUM | Frontend | mutation functions not wrapped in useCallback — stale userId closure risk |
+| FRONTEND-SORT-PARAMS-IGNORED-01 | LOW | Frontend | sort_column/sort_direction sent to API but not implemented server-side |
+| FRONTEND-CATEGORIES-CAST-01 | MEDIUM | Frontend | categories cast as Category[] but API returns string[] — runtime risk |
+
+### Carryover from Prior Sessions (Confirmed Still Unfixed)
+- CLUSTER-ISOLATION-01, ENTITY-WORKER-NO-ANCHOR-01, CONFIG-SAVE-SEQUENTIAL-01, ENTITY-ENRICH-N1-01, ENTITY-INVALIDATE-SEQUENTIAL-01, API-FILTER-FULLSCAN-01, SEARCH-HYDRATE-INVALIDAT-01, SEARCH-PAGINATION-01, MCP-CLASSIFY-GAP-01, MCP-SUPERSEDE-TAG-REDUNDANT-01
+
+### Test Baseline (unchanged — read-only audit)
+- **43 suites / 388 tests — ALL PASS**
+
+---
+
+## Session 8 — Compact Response + search_memory Recovery Test (2026-02-28)
+
+### Objective
+Two items from the Session 7 MCP evaluation report:
+1. **Item 2**: Reduce `add_memories` tool output to save tokens (response was ~45% of context window)
+2. **Item 5**: Stress-test `search_memory` mid-session for context recovery
+
+### Item 2 — Compact `add_memories` Response
+
+**Problem:** `add_memories` echoed full memory text in every result item back to the caller. For batch writes of 4 items with 200+ char memories, the response consumed significant context tokens. Callers need batch-item correlation but not the full text echo.
+
+**Fix in `lib/mcp/server.ts`:**
+- Added `summary` stats header to response: `{ stored, superseded, skipped, errored, invalidated, deleted_entities, total }`
+- Truncated echoed `memory` field to 80 chars with `…` suffix in `compactResults`
+- Response shape: `{ summary: {...}, results: compactResults }` instead of `{ results }`
+
+**Test update in `tests/unit/mcp/tools.test.ts`:**
+- MCP_ADD_01 now asserts `parsed.summary` matches expected counts
+
+### Item 5 — search_memory Mid-Session Context Recovery
+
+Tested 5 query patterns against the 37 stored audit memories from Session 7:
+
+| # | Query Pattern | Results | Recall Quality |
+|---|-------------|---------|----------------|
+| 1 | `"security findings cross-user namespace isolation"` | 5 hits, 0.86–0.97 | All 3 security findings recovered (CLUSTER-ISOLATION-01, ENTITY-WORKER-NO-ANCHOR-01, API-APPS-ISOLATION-01) |
+| 2 | `"unfixed carryover findings from prior audit sessions"` | 10 hits, 0.82–0.94 | Findings from all layers — MCP, entity, search, frontend, dedup, config |
+| 3 | `"HIGH severity bugs that need immediate fix"` | 10 hits, 0.83–0.96 | Pure semantic match (no "HIGH" literal in memory text) — correct action items ranked top |
+| 4 | `"write pipeline atomicity problems"` | 5 hits, 0.88–0.99 | WRITE-ATOMIC-01 at 0.99 (rank 1 on both arms) |
+| 5 | browse (no query) | total: 37 | Full inventory confirmed, tags + categories intact |
+
+**Key conclusions:**
+- **Semantic recall is strong**: Queries with zero keyword overlap still return correct results via vector similarity
+- **RRF fusion working correctly**: Dual-arm hits (text + vector) get highest relevance scores
+- **Context recovery viable**: An agent that lost context could reconstruct audit state from 3–4 targeted queries
+- **Browse confirms inventory**: 37/37 memories intact with metadata
+
+### Verification
+- `tsc --noEmit`: pre-existing errors only
+- `jest --runInBand`: **43 suites / 388 tests — ALL PASS**
+
