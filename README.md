@@ -1,126 +1,88 @@
-# Introduction
+# OpenMemory
 
-[Mem0](https://mem0.ai) ("mem-zero") enhances AI assistants and agents with an intelligent memory layer, enabling personalized AI interactions. It remembers user preferences, adapts to individual needs, and continuously learns over time—ideal for customer support chatbots, AI assistants, and autonomous systems.
+A self-hosted, private memory layer for LLMs — built as a **single Next.js 15 full-stack monolith** backed by **Memgraph** (graph + vector + full-text in one engine).
 
-### Key Features & Use Cases
+No Python. No separate backend. API routes live alongside the UI.
 
-**Core Capabilities:**
-- **Multi-Level Memory**: Seamlessly retains User, Session, and Agent state with adaptive personalization
-- **Developer-Friendly**: Intuitive API, cross-platform SDKs, and a fully managed service option
+## Architecture
 
-**Applications:**
-- **AI Assistants**: Consistent, context-rich conversations
-- **Customer Support**: Recall past tickets and user history for tailored help
-- **Healthcare**: Track patient preferences and history for personalized care
-- **Productivity & Gaming**: Adaptive workflows and environments based on user behavior
+```
+ui/
+  app/api/v1/          ← Next.js App Router API routes
+  app/api/mcp/         ← MCP SSE transport (Model Context Protocol)
+  lib/db/memgraph.ts   ← Database layer (Memgraph via Bolt)
+  lib/memory/write.ts  ← Write pipeline: embed → dedup → write → categorize → entity extract
+  lib/search/hybrid.ts ← BM25 + vector + Reciprocal Rank Fusion
+  lib/ai/client.ts     ← LLM client (OpenAI or Azure)
+  lib/embeddings/      ← Embedding providers (intelli-embed-v3 local ONNX default)
+```
 
-## 🚀 Quickstart Guide <a name="quickstart"></a>
+**Key capabilities:** bi-temporal versioning, hybrid search (BM25 + vector RRF), deduplication, entity extraction, community detection, cross-encoder reranking, namespace isolation.
 
-Choose between our hosted platform or self-hosted package:
+## Quickstart
 
-### Hosted Platform
+### Prerequisites
 
-Get up and running in minutes with automatic updates, analytics, and enterprise security.
+- **Node.js 20+** and **pnpm**
+- **Memgraph 3.3+** — run standalone or via included Docker Compose
 
-1. Sign up on [Mem0 Platform](https://app.mem0.ai)
-2. Embed the memory layer via SDK or API keys
-
-### Self-Hosted (Open Source)
-
-Install via npm:
+### 1. Start Memgraph
 
 ```bash
-npm install mem0ai
+docker compose -f docker-compose.memgraph.yml up -d
 ```
 
-Or via pip:
+### 2. Configure environment
+
 ```bash
-pip install mem0ai
+cp ui/.env.example ui/.env
+# Edit ui/.env — set your LLM API key (OpenAI or Azure) and Memgraph connection
 ```
 
-### Basic Usage
+### 3. Install & run
 
-Mem0 requires an LLM to function, with `gpt-4.1-nano-2025-04-14` from OpenAI as the default. However, it supports a variety of LLMs; for details, refer to our [Supported LLMs documentation](https://docs.mem0.ai/components/llms/overview).
-
-First step is to instantiate the memory:
-
-```typescript
-import OpenAI from 'openai';
-import { Memory } from 'mem0ai/oss';
-import * as readline from 'readline';
-
-const openai = new OpenAI();
-const memory = new Memory();
-
-async function chatWithMemories(message: string, userId = 'default_user'): Promise<string> {
-  // Retrieve relevant memories
-  const searchResult = await memory.search(message, { userId, limit: 3 });
-  const memoriesStr = searchResult.results
-    .map((entry: any) => `- ${entry.memory}`)
-    .join('\n');
-
-  // Generate assistant response
-  const systemPrompt = `You are a helpful AI. Answer based on the query and memories.\nUser Memories:\n${memoriesStr}`;
-  const messages: any[] = [
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: message },
-  ];
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4.1-nano-2025-04-14',
-    messages,
-  });
-  const assistantResponse = response.choices[0].message.content ?? '';
-
-  // Store the conversation in memory
-  messages.push({ role: 'assistant', content: assistantResponse });
-  await memory.add(messages, { userId });
-
-  return assistantResponse;
-}
-
-async function main() {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  console.log("Chat with AI (type 'exit' to quit)");
-  const ask = () =>
-    rl.question('You: ', async (input) => {
-      if (input.trim().toLowerCase() === 'exit') { console.log('Goodbye!'); rl.close(); return; }
-      console.log(`AI: ${await chatWithMemories(input.trim())}`);
-      ask();
-    });
-  ask();
-}
-
-main();
+```bash
+pnpm install
+pnpm dev          # http://localhost:3000
 ```
 
-For detailed integration steps, see the [Quickstart](https://docs.mem0.ai/quickstart) and [API Reference](https://docs.mem0.ai/api-reference).
+### Docker (full stack)
 
-## 🔗 Integrations & Demos
-
-- **ChatGPT with Memory**: Personalized chat powered by Mem0 ([Live Demo](https://mem0.dev/demo))
-- **Browser Extension**: Store memories across ChatGPT, Perplexity, and Claude ([Chrome Extension](https://chromewebstore.google.com/detail/onihkkbipkfeijkadecaafbgagkhglop?utm_source=item-share-cb))
-- **Langgraph Support**: Build a customer bot with Langgraph + Mem0 ([Guide](https://docs.mem0.ai/integrations/langgraph))
-- **CrewAI Integration**: Tailor CrewAI outputs with Mem0 ([Example](https://docs.mem0.ai/integrations/crewai))
-
-## 📚 Documentation & Support
-
-- Full docs: https://docs.mem0.ai
-- Community: [Discord](https://mem0.dev/DiG) · [Twitter](https://x.com/mem0ai)
-- Contact: founders@mem0.ai
-
-## Citation
-
-We now have a paper you can cite:
-
-```bibtex
-@article{mem0,
-  title={Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory},
-  author={Chhikara, Prateek and Khant, Dev and Aryan, Saket and Singh, Taranjeet and Yadav, Deshraj},
-  journal={arXiv preprint arXiv:2504.19413},
-  year={2025}
-}
+```bash
+docker compose up --build
 ```
 
-## ⚖️ License
+This starts both Memgraph and the Next.js app. UI at `http://localhost:3000`, Bolt at `localhost:7687`.
 
-Apache 2.0 — see the [LICENSE](https://github.com/mem0ai/mem0/blob/main/LICENSE) file for details.
+## MCP Integration
+
+Connect any MCP-compatible client (Claude Desktop, Cursor, VS Code, etc.):
+
+```
+http://localhost:3000/mcp/<client-name>/sse/<user-id>
+```
+
+## Development
+
+```bash
+pnpm dev                    # dev server (port 3000)
+pnpm test                   # unit tests (Jest, in-band)
+pnpm test:e2e               # integration tests
+cd ui && pnpm test:pw       # Playwright E2E
+cd ui && pnpm exec tsc --noEmit  # type check
+```
+
+## Project Structure
+
+| Path | Description |
+|------|-------------|
+| `ui/` | Next.js 15 app (API + UI + MCP server) |
+| `compose/` | Docker Compose overrides for alternative vector stores |
+| `docker-compose.yml` | Full stack (Memgraph + app) |
+| `docker-compose.memgraph.yml` | Memgraph standalone |
+| `docker-compose.portainer.yml` | Production stack for Portainer / TrueNAS |
+| `docs/` | Documentation |
+
+## License
+
+Apache 2.0

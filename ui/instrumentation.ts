@@ -35,8 +35,8 @@ export async function register() {
         console.error("     MEMGRAPH_USERNAME=<user>   (or MEMGRAPH_USER)");
         console.error("     MEMGRAPH_PASSWORD=<pass>");
         console.error("");
-        console.error("   ► Are you running `pnpm dev` from `openmemory/ui/`?");
-        console.error("     The .env file lives in openmemory/ui/ and is NOT");
+        console.error("   ► Are you running `pnpm dev` from `ui/`?");
+        console.error("     The .env file lives in ui/ and is NOT");
         console.error("     loaded when the server starts from the repo root.");
       }
       console.error("   ► ALL API REQUESTS WILL RETURN 500 UNTIL THIS IS FIXED");

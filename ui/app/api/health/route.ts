@@ -42,7 +42,7 @@ export async function GET() {
       url: memgraphUrl,
       user: memgraphUser,
       error: isAuth
-        ? `Authentication failure — check MEMGRAPH_USERNAME / MEMGRAPH_PASSWORD in .env. Are you running from openmemory/ui/?`
+        ? `Authentication failure — check MEMGRAPH_USERNAME / MEMGRAPH_PASSWORD in .env. Are you running from ui/?`
         : msg.slice(0, 200),
     };
   }

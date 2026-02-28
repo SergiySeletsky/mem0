@@ -15,7 +15,7 @@
 ##
 ## ── Image build ─────────────────────────────────────────────────────────────
 ## Build on any machine with Docker and push to a registry, then reference below.
-##   docker build -t your-registry/mem0/openmemory:latest ./openmemory/ui/
+##   docker build -t your-registry/mem0/openmemory:latest ./ui/
 ##   docker push your-registry/mem0/openmemory:latest
 ## Update the openmemory image: line accordingly.
 ##

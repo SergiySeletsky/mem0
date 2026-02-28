@@ -87,10 +87,8 @@ export default tseslint.config(
   },
 
   // Next.js app — use eslint-config-next for the UI workspace
-  // Run `pnpm --filter my-v0-project add -D eslint-config-next` if not already present,
-  // then the openmemory/ui/ directory can have its own eslint.config.mjs that extends this.
   {
-    files: ["openmemory/ui/**/*.ts", "openmemory/ui/**/*.tsx"],
+    files: ["ui/**/*.ts", "ui/**/*.tsx"],
     rules: {
       // Next.js pages use default exports; relax this rule for the UI
       "import/no-default-export": "off",

@@ -1,3 +1,2 @@
 packages:
-  - "mem0-ts"
-  - "openmemory/ui"
+  - "ui"
