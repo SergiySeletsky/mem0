@@ -18,7 +18,7 @@ services:
 
   openmemory:
     build:
-      context: ui/
+      context: .
       dockerfile: Dockerfile
     image: mem0/openmemory:latest
     ports:

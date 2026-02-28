@@ -7,7 +7,6 @@ No Python. No separate backend. API routes live alongside the UI.
 ## Architecture
 
 ```
-ui/
   app/api/v1/          ← Next.js App Router API routes
   app/api/mcp/         ← MCP SSE transport (Model Context Protocol)
   lib/db/memgraph.ts   ← Database layer (Memgraph via Bolt)
@@ -35,8 +34,8 @@ docker compose -f docker-compose.memgraph.yml up -d
 ### 2. Configure environment
 
 ```bash
-cp ui/.env.example ui/.env
-# Edit ui/.env — set your LLM API key (OpenAI or Azure) and Memgraph connection
+cp .env.example .env
+# Edit .env — set your LLM API key (OpenAI or Azure) and Memgraph connection
 ```
 
 ### 3. Install & run
@@ -68,15 +67,19 @@ http://localhost:3000/mcp/<client-name>/sse/<user-id>
 pnpm dev                    # dev server (port 3000)
 pnpm test                   # unit tests (Jest, in-band)
 pnpm test:e2e               # integration tests
-cd ui && pnpm test:pw       # Playwright E2E
-cd ui && pnpm exec tsc --noEmit  # type check
+pnpm test:pw                # Playwright E2E
+pnpm exec tsc --noEmit      # type check
 ```
 
 ## Project Structure
 
 | Path | Description |
 |------|-------------|
-| `ui/` | Next.js 15 app (API + UI + MCP server) |
+| `app/` | Next.js App Router (API routes + pages) |
+| `lib/` | Core library (memory, search, embeddings, DB, AI) |
+| `components/` | React UI components |
+| `store/` | Redux store |
+| `tests/` | Jest unit + baseline tests |
 | `compose/` | Docker Compose overrides for alternative vector stores |
 | `docker-compose.yml` | Full stack (Memgraph + app) |
 | `docker-compose.memgraph.yml` | Memgraph standalone |

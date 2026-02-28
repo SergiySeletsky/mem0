@@ -2,11 +2,10 @@
 
 ## Architecture
 
-OpenMemory is a **single Next.js 15 full-stack monolith** (`ui/`).
+OpenMemory is a **single Next.js 15 full-stack monolith**.
 There is no separate backend — API routes live alongside UI pages.
 
 ```
-ui/
   app/api/v1/        ← 25 Next.js App Router API routes (all memory, app, config, backup)
   app/api/mcp/       ← MCP SSE transport (Model Context Protocol server)
   lib/db/memgraph.ts ← ONLY database layer — all data lives in Memgraph
@@ -57,7 +56,7 @@ Use `getLLMClient()` from `lib/ai/client.ts` and `embed()` from `lib/embeddings/
 ## Dev Workflow
 
 ```bash
-# Start dev server (from ui/ or repo root)
+# Start dev server (from repo root)
 pnpm dev                       # port 3000
 
 # Type check
@@ -92,7 +91,7 @@ context window, bulk ingestion, community detection, cross-encoder reranking, na
 
 - **No confirmation loops.** Proceed: Analyse → Plan → Implement → cover with tests → Verify → Report. Infer intent; state what you chose.
 - **Error recovery order:** (1) `pnpm exec tsc --noEmit`, (2) `pnpm test --runInBand`, (3) `pnpm build`, (4) `pnpm test:pw`. Fix at the failing tier before moving on. 3-attempt limit: escalate to refactor or revert if same fix fails 3× at same tier.
-- **State:** Append session notes to `ui/AGENTS.md`. Never create separate per-task files. Compress old entries when context grows large.
+- **State:** Append session notes to `AGENTS.md`. Never create separate per-task files. Compress old entries when context grows large.
 - **UI bugs:** Use Playwright MCP (`console_messages level:error` → `network_requests` → `snapshot`) before editing source.
 - **Quality gates:** `"strict": true` always; zero `tsc` errors; all tests pass (3 `resolve.test.ts` pre-existing failures excepted); ≥90% coverage on new `runWrite`/write-pipeline code; new/modified API routes verified <200 ms p95.
 

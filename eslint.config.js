@@ -86,15 +86,6 @@ export default tseslint.config(
     },
   },
 
-  // Next.js app — use eslint-config-next for the UI workspace
-  {
-    files: ["ui/**/*.ts", "ui/**/*.tsx"],
-    rules: {
-      // Next.js pages use default exports; relax this rule for the UI
-      "import/no-default-export": "off",
-    },
-  },
-
   // Test files — allow require() for jest dynamic mock factories and lazy loading patterns
   {
     files: ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"],

@@ -41,5 +41,4 @@ yarn-error.log*
 # ── Misc ─────────────────────────────────────────────────────────────────────
 .openmemory/
 .playwright-mcp/
-ui/package-lock.json
 tsconfig.tsbuildinfo

@@ -1,0 +1,30 @@
+# Ignore all .env files
+**/.env
+
+# Ignore all database files
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+
+# Ignore logs
+**/*.log
+
+# Ignore runtime data
+**/node_modules
+**/.next
+**/coverage
+**/test-results
+**/playwright-report
+
+# Ignore Docker runtime files
+**/.dockerignore
+**/Dockerfile
+**/docker-compose*.yml
+
+# Ignore non-app directories
+docs/
+compose/
+.git/
+.github/
+.playwright-mcp/
+.vscode/

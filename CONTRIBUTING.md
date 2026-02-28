@@ -22,8 +22,8 @@
 docker compose -f docker-compose.memgraph.yml up -d
 
 # Configure environment
-cp ui/.env.example ui/.env
-# Edit ui/.env with your settings
+cp .env.example .env
+# Edit .env with your settings
 
 # Install and run
 pnpm install
@@ -35,8 +35,8 @@ pnpm dev
 ```bash
 pnpm test                         # unit tests
 pnpm test:e2e                     # integration tests
-cd ui && pnpm exec tsc --noEmit   # type check
-cd ui && pnpm test:pw             # Playwright E2E
+pnpm exec tsc --noEmit            # type check
+pnpm test:pw                      # Playwright E2E
 ```
 
 ## Workflow
