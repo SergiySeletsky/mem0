@@ -2,8 +2,8 @@
  * Graph traversal search — find memories through entity and relationship metadata.
  *
  * Given a natural-language query, finds entities matching by name, description,
- * or open-ontology metadata, traverses their RELATED_TO edges (1 hop), and
- * returns connected Memory IDs.
+ * or open-ontology metadata, traverses their RELATED_TO edges (configurable
+ * depth, default 2 hops), and returns connected Memory IDs with hop distance.
  *
  * This complements hybrid search (BM25 + vector on Memory.content) by
  * discovering memories through the entity graph — useful when the query
@@ -23,6 +23,8 @@ import { getLLMClient } from "@/lib/ai/client";
 
 export interface GraphTraversalResult {
   memoryId: string;
+  /** Minimum number of hops from a seed entity to this memory's entity (0 = seed itself). */
+  hopDistance: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,8 +114,9 @@ export function extractSearchTermsRegex(query: string): string[] {
  * 1. Find seed entities whose name, description, or metadata matches query terms
  * 2. Find entities connected via relationships whose type, description, or
  *    metadata matches query terms
- * 3. Expand seed entities 1 hop via live RELATED_TO edges
+ * 3. Expand seed entities up to `maxDepth` hops via live RELATED_TO edges
  * 4. Collect Memory nodes connected to any traversed entity via [:MENTIONS]
+ *    with minimum hop distance from the nearest seed entity
  *
  * All queries are anchored through User for namespace isolation (Spec 09).
  * Only live memories (invalidAt IS NULL) and live edges are returned.
@@ -121,9 +124,10 @@ export function extractSearchTermsRegex(query: string): string[] {
 export async function traverseEntityGraph(
   query: string,
   userId: string,
-  options?: { limit?: number },
+  options?: { limit?: number; maxDepth?: number },
 ): Promise<GraphTraversalResult[]> {
   const limit = options?.limit ?? 20;
+  const maxDepth = Math.max(1, Math.min(options?.maxDepth ?? 2, 5));
   const terms = await extractSearchTerms(query);
   if (terms.length === 0) return [];
 
@@ -167,31 +171,56 @@ export async function traverseEntityGraph(
   const allSeedIds = [...new Set([...seedRows.map((r) => r.entityId), ...relSeedIds])];
   if (allSeedIds.length === 0) return [];
 
-  // Step 2: Expand seeds by 1 hop via RELATED_TO
-  const expandRows = await runRead<{ entityId: string }>(
+  // Step 2: Expand seeds up to maxDepth hops via RELATED_TO, tracking hop distance.
+  // Uses variable-length path to discover entities within the configured radius.
+  // Each entity gets the minimum hop distance from any seed.
+  const expandRows = await runRead<{ entityId: string; hops: number }>(
     `UNWIND $seedIds AS sid
      MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(seed:Entity {id: sid})
-     OPTIONAL MATCH (seed)-[r:RELATED_TO]-(neighbor:Entity)<-[:HAS_ENTITY]-(u)
-     WHERE r.invalidAt IS NULL
-     WITH collect(DISTINCT seed.id) + collect(DISTINCT neighbor.id) AS ids
-     UNWIND ids AS entityId
-     WHERE entityId IS NOT NULL
-     RETURN DISTINCT entityId`,
+     // Seed itself at distance 0
+     WITH seed, u, 0 AS hops
+     RETURN seed.id AS entityId, hops
+     UNION
+     UNWIND $seedIds AS sid
+     MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(seed:Entity {id: sid})
+     MATCH path = (seed)-[:RELATED_TO*1..${maxDepth}]-(neighbor:Entity)<-[:HAS_ENTITY]-(u)
+     WHERE ALL(rel IN relationships(path) WHERE rel.invalidAt IS NULL)
+     WITH neighbor, min(size(relationships(path))) AS hops
+     RETURN neighbor.id AS entityId, hops`,
     { userId, seedIds: allSeedIds },
   );
 
-  const allEntityIds = expandRows.map((r) => r.entityId);
-  if (allEntityIds.length === 0) return [];
+  // Build entity→minHops map (an entity reachable from multiple seeds keeps the shortest hop)
+  const entityHopMap = new Map<string, number>();
+  for (const row of expandRows) {
+    const eid = row.entityId as string;
+    const h = typeof row.hops === "number" ? row.hops : Number(row.hops);
+    const prev = entityHopMap.get(eid);
+    if (prev === undefined || h < prev) entityHopMap.set(eid, h);
+  }
+  if (entityHopMap.size === 0) return [];
 
   // Step 3: Find memories connected to any traversed entity via [:MENTIONS]
-  const memoryRows = await runRead<{ memoryId: string }>(
+  // Each memory inherits the minimum hop distance among its connected entities.
+  const memoryRows = await runRead<{ memoryId: string; entityId: string }>(
     `UNWIND $entityIds AS eid
      MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory)-[:MENTIONS]->(e:Entity {id: eid})
      WHERE m.invalidAt IS NULL
-     RETURN DISTINCT m.id AS memoryId
+     WITH m, e.id AS entityId
+     RETURN DISTINCT m.id AS memoryId, entityId
      LIMIT $limit`,
-    { userId, entityIds: allEntityIds, limit },
+    { userId, entityIds: [...entityHopMap.keys()], limit },
   );
 
-  return memoryRows;
+  // Build memory→minHopDistance map
+  const memHopMap = new Map<string, number>();
+  for (const row of memoryRows) {
+    const mid = row.memoryId as string;
+    const eid = row.entityId as string;
+    const entityHop = entityHopMap.get(eid) ?? 0;
+    const prev = memHopMap.get(mid);
+    if (prev === undefined || entityHop < prev) memHopMap.set(mid, entityHop);
+  }
+
+  return [...memHopMap.entries()].map(([memoryId, hopDistance]) => ({ memoryId, hopDistance }));
 }

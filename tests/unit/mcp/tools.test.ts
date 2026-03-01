@@ -610,9 +610,9 @@ describe("MCP Tool Handlers — search_memory", () => {
         categories: ["medical"], tags: [], appName: null,
       },
     ] as any);
-    // Graph traversal finds a different memory
+    // Graph traversal finds a different memory (hop 1 = score 0.5)
     mockTraverseEntityGraph.mockResolvedValueOnce([
-      { memoryId: "m-graph" },
+      { memoryId: "m-graph", hopDistance: 1 },
     ]);
     // Hydration query for graph-only memory
     mockRunRead.mockResolvedValueOnce([
@@ -648,7 +648,7 @@ describe("MCP Tool Handlers — search_memory", () => {
     ] as any);
     // Graph traversal finds the same memory — should be deduplicated
     mockTraverseEntityGraph.mockResolvedValueOnce([
-      { memoryId: "m1" },
+      { memoryId: "m1", hopDistance: 0 },
     ]);
     mockRunWrite.mockResolvedValueOnce([]); // access log
 
@@ -689,7 +689,7 @@ describe("MCP Tool Handlers — search_memory", () => {
   it("MCP_GRAPH_04: graph-only results subject to post-filters", async () => {
     mockHybridSearch.mockResolvedValueOnce([]);
     mockTraverseEntityGraph.mockResolvedValueOnce([
-      { memoryId: "m-graph" },
+      { memoryId: "m-graph", hopDistance: 0 },
     ]);
     // Hydrated graph memory has a category that doesn't match the filter
     mockRunRead.mockResolvedValueOnce([
@@ -731,6 +731,55 @@ describe("MCP Tool Handlers — search_memory", () => {
     expect(parsed.results[0].id).toBe("m1");
     // No hydration call — no graph-only results
     expect(mockRunRead).not.toHaveBeenCalled();
+  });
+
+  it("MCP_GRAPH_06: distance-based scoring — closer hop = higher score", async () => {
+    mockHybridSearch.mockResolvedValueOnce([]);
+    // Graph finds 3 memories at different hop distances
+    mockTraverseEntityGraph.mockResolvedValueOnce([
+      { memoryId: "m-hop0", hopDistance: 0 },
+      { memoryId: "m-hop1", hopDistance: 1 },
+      { memoryId: "m-hop2", hopDistance: 2 },
+    ]);
+    // Hydrate all 3
+    mockRunRead.mockResolvedValueOnce([
+      {
+        id: "m-hop0", content: "Seed entity memory",
+        createdAt: "2026-03-01", updatedAt: "2026-03-01",
+        appName: null, categories: [], tags: [],
+      },
+      {
+        id: "m-hop1", content: "1-hop neighbor memory",
+        createdAt: "2026-03-01", updatedAt: "2026-03-01",
+        appName: null, categories: [], tags: [],
+      },
+      {
+        id: "m-hop2", content: "2-hop neighbor memory",
+        createdAt: "2026-03-01", updatedAt: "2026-03-01",
+        appName: null, categories: [], tags: [],
+      },
+    ]);
+    mockRunWrite.mockResolvedValueOnce([]); // access log
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "graph scoring test" },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toHaveLength(3);
+    // Sorted by score descending — hop 0 highest, hop 2 lowest
+    const hop0 = parsed.results.find((r: any) => r.id === "m-hop0");
+    const hop1 = parsed.results.find((r: any) => r.id === "m-hop1");
+    const hop2 = parsed.results.find((r: any) => r.id === "m-hop2");
+    // hop 0 → GRAPH_MAX_SCORE/(0+1) = 0.01, hop 1 → 0.005, hop 2 → 0.0033
+    // After normalization (rrfScore/0.032786, min 1.0, round to 2dp):
+    // hop 0 → 0.31, hop 1 → 0.15, hop 2 → 0.10
+    expect(hop0.relevance_score).toBeGreaterThan(hop1.relevance_score);
+    expect(hop1.relevance_score).toBeGreaterThan(hop2.relevance_score);
+    // All graph-only scores should be < 1.0 (below hybrid RRF range)
+    expect(hop0.relevance_score).toBeLessThan(1.0);
+    expect(hop2.relevance_score).toBeGreaterThan(0);
   });
 });
 

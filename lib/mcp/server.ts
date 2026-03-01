@@ -36,6 +36,7 @@ import type { EntityProfile } from "@/lib/mcp/entities";
 import { hybridSearch } from "@/lib/search/hybrid";
 import type { HybridSearchResult } from "@/lib/search/hybrid";
 import { traverseEntityGraph } from "@/lib/search/graph-traversal";
+import type { GraphTraversalResult } from "@/lib/search/graph-traversal";
 import { buildDateFields } from "@/lib/mcp/dates";
 
 /**
@@ -510,16 +511,28 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
             mode: "hybrid",
             ...(tag ? { candidateSize: fetchLimit } : {}),
           }),
-          traverseEntityGraph(query!, userId, { limit: fetchLimit }).catch(() => [] as { memoryId: string }[]),
+          traverseEntityGraph(query!, userId, { limit: fetchLimit }).catch(() => [] as GraphTraversalResult[]),
         ]);
 
-        // Merge: inject graph-discovered memories not found by hybrid search
-        const GRAPH_BASE_SCORE = 0.01;
+        // Merge: inject graph-discovered memories not found by hybrid search.
+        // Distance-based scoring: base score (0.01) modulated by hop distance.
+        // hop 0 (seed) = 0.01, hop 1 = 0.005, hop 2 ≈ 0.0033, etc.
+        // This keeps graph results below RRF hybrid scores (typ. 0.015–0.033)
+        // so hybrid matches rank higher, while closer graph neighbors still
+        // outrank distant ones.
+        const GRAPH_MAX_SCORE = 0.01;
         let results: HybridSearchResult[] = [...hybridResults];
         const hybridIds = new Set(hybridResults.map((r) => r.id));
-        const graphOnlyIds = graphResults
-          .map((r) => r.memoryId)
-          .filter((id) => !hybridIds.has(id));
+        const graphOnlyEntries = graphResults
+          .filter((r) => !hybridIds.has(r.memoryId));
+
+        // Build memoryId→minHopDistance map for graph-only results
+        const graphHopMap = new Map<string, number>();
+        for (const r of graphOnlyEntries) {
+          const prev = graphHopMap.get(r.memoryId);
+          if (prev === undefined || r.hopDistance < prev) graphHopMap.set(r.memoryId, r.hopDistance);
+        }
+        const graphOnlyIds = [...graphHopMap.keys()];
 
         if (graphOnlyIds.length > 0) {
           // Hydrate graph-only memories using the same pattern as hybrid.ts
@@ -540,9 +553,11 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
           );
 
           for (const row of graphRows) {
+            const hopDistance = graphHopMap.get(row.id as string) ?? 0;
+            const graphScore = GRAPH_MAX_SCORE / (hopDistance + 1);
             results.push({
               id: row.id as string,
-              rrfScore: GRAPH_BASE_SCORE,
+              rrfScore: graphScore,
               textRank: null,
               vectorRank: null,
               content: row.content as string,
