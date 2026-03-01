@@ -79,13 +79,13 @@ describe("searchEntities", () => {
     // Arm 1: substring
     mockRunRead
       .mockResolvedValueOnce([
-        { id: "e1", name: "Alice", type: "PERSON", description: "Engineer", memoryCount: 3 },
+        { id: "e1", name: "Alice", type: "PERSON", description: "Engineer", memoryCount: 3, rank: 5, summary: "An engineer" },
       ])
       // Arm 2: semantic (no embedding vector needed since embed returns value)
       .mockResolvedValueOnce([])
       // UNWIND relationships for all entities
       .mockResolvedValueOnce([
-        { entityId: "e1", sourceName: "Alice", relType: "WORKS_AT", targetName: "Acme", description: null },
+        { entityId: "e1", sourceName: "Alice", relType: "WORKS_AT", targetName: "Acme", description: null, weight: 0.9 },
       ]);
 
     mockEmbed.mockResolvedValueOnce([0.1, 0.2]);
@@ -103,8 +103,11 @@ describe("searchEntities", () => {
       type: "WORKS_AT",
       target: "Acme",
       description: null,
+      weight: 0.9,
       metadata: {},
     });
+    expect(result[0].rank).toBe(5);
+    expect(result[0].summary).toBe("An engineer");
   });
 
   it("ENTITY_SEARCH_02: semantic arm results merged with substring; duplicates removed", async () => {
@@ -209,12 +212,12 @@ describe("searchEntities", () => {
   it("ENTITY_SEARCH_07: relationships fetched via UNWIND and mapped correctly", async () => {
     mockRunRead
       .mockResolvedValueOnce([
-        { id: "e1", name: "Alice", type: "PERSON", description: null, memoryCount: 1 },
+        { id: "e1", name: "Alice", type: "PERSON", description: null, memoryCount: 1, rank: 0, summary: null },
       ])
       .mockResolvedValueOnce([]) // semantic
       .mockResolvedValueOnce([
-        { entityId: "e1", sourceName: "Alice", relType: "MANAGES", targetName: "Team A", description: "Direct reports" },
-        { entityId: "e1", sourceName: "HR", relType: "OVERSEES", targetName: "Alice", description: null },
+        { entityId: "e1", sourceName: "Alice", relType: "MANAGES", targetName: "Team A", description: "Direct reports", weight: 0.8 },
+        { entityId: "e1", sourceName: "HR", relType: "OVERSEES", targetName: "Alice", description: null, weight: 0.5 },
       ]);
 
     mockEmbed.mockResolvedValueOnce([]);
@@ -227,6 +230,7 @@ describe("searchEntities", () => {
       type: "MANAGES",
       target: "Team A",
       description: "Direct reports",
+      weight: 0.8,
       metadata: {},
     });
     expect(result[0].relationships[1]).toEqual({
@@ -234,6 +238,7 @@ describe("searchEntities", () => {
       type: "OVERSEES",
       target: "Alice",
       description: null,
+      weight: 0.5,
       metadata: {},
     });
   });

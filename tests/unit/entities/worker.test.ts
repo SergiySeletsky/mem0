@@ -85,9 +85,9 @@ describe("processEntityExtraction", () => {
     expect(mockResolve).toHaveBeenCalledTimes(2);
     expect(mockLink).toHaveBeenCalledTimes(2);
 
-    // Relationship extraction: linkEntities called with resolved IDs + entity names + metadata
+    // Relationship extraction: linkEntities called with resolved IDs + entity names + metadata + weight
     expect(mockLinkEntities).toHaveBeenCalledWith(
-      "entity-alice", "entity-acme", "WORKS_AT", "Alice works at Acme Corp", "Alice", "Acme Corp", undefined
+      "entity-alice", "entity-acme", "WORKS_AT", "Alice works at Acme Corp", "Alice", "Acme Corp", undefined, undefined
     );
 
     // Final SET extractionStatus = 'done'
@@ -218,10 +218,10 @@ describe("processEntityExtraction", () => {
 
     await processEntityExtraction("mem-rel-01");
 
-    // Only valid pair → 1 linkEntities call (now with entity names + metadata)
+    // Only valid pair → 1 linkEntities call (now with entity names + metadata + weight)
     expect(mockLinkEntities).toHaveBeenCalledTimes(1);
     expect(mockLinkEntities).toHaveBeenCalledWith(
-      "ent-pg", "ent-auth", "STORES_DATA_FOR", "Postgres holds user data for AuthService", "Postgres", "AuthService", undefined
+      "ent-pg", "ent-auth", "STORES_DATA_FOR", "Postgres holds user data for AuthService", "Postgres", "AuthService", undefined, undefined
     );
   });
 
@@ -357,7 +357,8 @@ describe("processEntityExtraction", () => {
     expect(mockLinkEntities).toHaveBeenCalledTimes(1);
     expect(mockLinkEntities).toHaveBeenCalledWith(
       "ent-alice", "ent-acme", "WORKS_AT", "Employee at Acme", "Alice", "Acme",
-      { since: "2024-01", role: "Engineer" }
+      { since: "2024-01", role: "Engineer" },
+      undefined
     );
   });
 });

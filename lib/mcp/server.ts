@@ -515,22 +515,27 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         ]);
 
         // Merge: inject graph-discovered memories not found by hybrid search.
-        // Distance-based scoring: base score (0.01) modulated by hop distance.
-        // hop 0 (seed) = 0.01, hop 1 = 0.005, hop 2 ≈ 0.0033, etc.
+        // Distance-based scoring with edge weight modulation:
+        //   baseScore = GRAPH_MAX_SCORE / (hopDistance + 1)
+        //   weightedScore = baseScore * avgWeight
+        // hop 0 (seed, w=1.0) = 0.01, hop 1 (w=0.8) = 0.004, hop 2 (w=0.5) ≈ 0.0017
         // This keeps graph results below RRF hybrid scores (typ. 0.015–0.033)
-        // so hybrid matches rank higher, while closer graph neighbors still
-        // outrank distant ones.
+        // while strongly-connected close neighbors outrank weakly-connected distant ones.
         const GRAPH_MAX_SCORE = 0.01;
         let results: HybridSearchResult[] = [...hybridResults];
         const hybridIds = new Set(hybridResults.map((r) => r.id));
         const graphOnlyEntries = graphResults
           .filter((r) => !hybridIds.has(r.memoryId));
 
-        // Build memoryId→minHopDistance map for graph-only results
+        // Build memoryId→{minHopDistance, avgWeight} map for graph-only results
         const graphHopMap = new Map<string, number>();
+        const graphWeightMap = new Map<string, number>();
         for (const r of graphOnlyEntries) {
           const prev = graphHopMap.get(r.memoryId);
-          if (prev === undefined || r.hopDistance < prev) graphHopMap.set(r.memoryId, r.hopDistance);
+          if (prev === undefined || r.hopDistance < prev) {
+            graphHopMap.set(r.memoryId, r.hopDistance);
+            graphWeightMap.set(r.memoryId, r.avgWeight);
+          }
         }
         const graphOnlyIds = [...graphHopMap.keys()];
 
@@ -554,7 +559,8 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
 
           for (const row of graphRows) {
             const hopDistance = graphHopMap.get(row.id as string) ?? 0;
-            const graphScore = GRAPH_MAX_SCORE / (hopDistance + 1);
+            const avgWeight = graphWeightMap.get(row.id as string) ?? 0.5;
+            const graphScore = (GRAPH_MAX_SCORE / (hopDistance + 1)) * avgWeight;
             results.push({
               id: row.id as string,
               rrfScore: graphScore,
@@ -628,6 +634,30 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
           }
         }
 
+        // P0: Community summary enrichment (GraphRAG Global Search equivalent)
+        // Find communities connected to the result memories and include their
+        // summaries — provides high-level thematic context alongside raw memories.
+        let communities: { id: string; name: string; summary: string; level: number }[] = [];
+        if (filtered.length > 0) {
+          try {
+            const memIds = filtered.map(r => r.id);
+            const communityRows = await runRead<{
+              id: string; name: string; summary: string; level: number;
+            }>(
+              `UNWIND $memIds AS memId
+               MATCH (m:Memory {id: memId})-[:IN_COMMUNITY]->(c:Community)
+               WITH DISTINCT c
+               RETURN c.id AS id, c.name AS name, c.summary AS summary, coalesce(c.level, 0) AS level
+               ORDER BY c.level ASC, c.memberCount DESC
+               LIMIT 5`,
+              { memIds },
+            );
+            communities = communityRows.filter(c => c.summary);
+          } catch {
+            // Community enrichment is best-effort
+          }
+        }
+
         return {
           content: [{
             type: "text",
@@ -670,12 +700,22 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
                   name: e.name,
                   type: e.type,
                   description: e.description,
+                  ...(e.rank > 0 ? { rank: e.rank } : {}),
+                  ...(e.summary ? { summary: e.summary } : {}),
                   ...(Object.keys(e.metadata).length > 0 ? { metadata: e.metadata } : {}),
                   memory_count: e.memoryCount,
                   relationships: e.relationships.map((r) => ({
                     ...r,
+                    ...(r.weight !== undefined && r.weight !== 0.5 ? { weight: r.weight } : {}),
                     ...(Object.keys(r.metadata).length > 0 ? { metadata: r.metadata } : {}),
                   })),
+                })),
+              } : {}),
+              ...(communities.length > 0 ? {
+                communities: communities.map((c) => ({
+                  name: c.name,
+                  summary: c.summary,
+                  level: c.level,
                 })),
               } : {}),
               ...(tagFilterWarning ? { tag_filter_warning: tagFilterWarning } : {}),

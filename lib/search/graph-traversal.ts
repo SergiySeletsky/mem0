@@ -25,6 +25,8 @@ export interface GraphTraversalResult {
   memoryId: string;
   /** Minimum number of hops from a seed entity to this memory's entity (0 = seed itself). */
   hopDistance: number;
+  /** Average edge weight along the path (0.0–1.0). Seeds (hop 0) get weight 1.0. */
+  avgWeight: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -169,34 +171,77 @@ export async function traverseEntityGraph(
 
   // Merge seed entity IDs from both arms
   const allSeedIds = [...new Set([...seedRows.map((r) => r.entityId), ...relSeedIds])];
-  if (allSeedIds.length === 0) return [];
+
+  // P4 — DRIFT-style community priming: find communities whose name or summary
+  // matches query terms, then inject their member entities as additional seeds.
+  // This provides a "global → local" bridge: community-level thematic matches
+  // expand the traversal to entities the user hasn't directly mentioned.
+  let communitySeedIds: string[] = [];
+  try {
+    const communityRows = await runRead<{ entityId: string }>(
+      `MATCH (u:User {userId: $userId})-[:HAS_COMMUNITY]->(c:Community)
+       WHERE ANY(term IN $terms WHERE
+         toLower(c.name) CONTAINS term
+         OR toLower(c.summary) CONTAINS term
+       )
+       WITH c LIMIT 3
+       MATCH (m:Memory)-[:IN_COMMUNITY]->(c)
+       WHERE m.invalidAt IS NULL
+       MATCH (m)-[:MENTIONS]->(e:Entity)<-[:HAS_ENTITY]-(u)
+       RETURN DISTINCT e.id AS entityId
+       LIMIT 20`,
+      { userId, terms },
+    );
+    communitySeedIds = communityRows
+      .map((r) => r.entityId)
+      .filter((id) => !allSeedIds.includes(id)); // avoid duplicates with direct seeds
+  } catch {
+    // Community priming is best-effort — skip on any failure
+  }
+
+  // Merge all seeds: direct entity matches + community-primed entities
+  const directAndCommSeeds = [...new Set([...allSeedIds, ...communitySeedIds])];
+  if (directAndCommSeeds.length === 0) return [];
 
   // Step 2: Expand seeds up to maxDepth hops via RELATED_TO, tracking hop distance.
   // Uses variable-length path to discover entities within the configured radius.
   // Each entity gets the minimum hop distance from any seed.
-  const expandRows = await runRead<{ entityId: string; hops: number }>(
+  // Neighbor fan-out is ordered by entity rank (degree centrality) so the most
+  // connected/important entities are traversed first (GraphRAG-inspired).
+  // Also computes average edge weight along the path for weight-aware scoring.
+  const expandRows = await runRead<{ entityId: string; hops: number; avgWeight: number }>(
     `UNWIND $seedIds AS sid
      MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(seed:Entity {id: sid})
-     // Seed itself at distance 0
-     WITH seed, u, 0 AS hops
-     RETURN seed.id AS entityId, hops
+     // Seed itself at distance 0, weight 1.0
+     WITH seed, u, 0 AS hops, 1.0 AS avgWeight
+     RETURN seed.id AS entityId, hops, avgWeight
      UNION
      UNWIND $seedIds AS sid
      MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(seed:Entity {id: sid})
      MATCH path = (seed)-[:RELATED_TO*1..${maxDepth}]-(neighbor:Entity)<-[:HAS_ENTITY]-(u)
      WHERE ALL(rel IN relationships(path) WHERE rel.invalidAt IS NULL)
-     WITH neighbor, min(size(relationships(path))) AS hops
-     RETURN neighbor.id AS entityId, hops`,
-    { userId, seedIds: allSeedIds },
+     WITH neighbor,
+          min(size(relationships(path))) AS hops,
+          avg(reduce(w = 0.0, rel IN relationships(path) | w + coalesce(rel.weight, 0.5)) / size(relationships(path))) AS avgWeight
+     RETURN neighbor.id AS entityId, hops, avgWeight
+     ORDER BY neighbor.rank DESC`,
+    { userId, seedIds: directAndCommSeeds },
   );
 
-  // Build entity→minHops map (an entity reachable from multiple seeds keeps the shortest hop)
+  // Build entity→{minHops, avgWeight} map (keep shortest hop; for ties, prefer higher weight)
   const entityHopMap = new Map<string, number>();
+  const entityWeightMap = new Map<string, number>();
   for (const row of expandRows) {
     const eid = row.entityId as string;
     const h = typeof row.hops === "number" ? row.hops : Number(row.hops);
+    const w = typeof row.avgWeight === "number" ? row.avgWeight : Number(row.avgWeight || 0.5);
     const prev = entityHopMap.get(eid);
-    if (prev === undefined || h < prev) entityHopMap.set(eid, h);
+    if (prev === undefined || h < prev) {
+      entityHopMap.set(eid, h);
+      entityWeightMap.set(eid, w);
+    } else if (h === prev && w > (entityWeightMap.get(eid) ?? 0)) {
+      entityWeightMap.set(eid, w);
+    }
   }
   if (entityHopMap.size === 0) return [];
 
@@ -212,15 +257,26 @@ export async function traverseEntityGraph(
     { userId, entityIds: [...entityHopMap.keys()], limit },
   );
 
-  // Build memory→minHopDistance map
+  // Build memory→{minHopDistance, avgWeight} map
   const memHopMap = new Map<string, number>();
+  const memWeightMap = new Map<string, number>();
   for (const row of memoryRows) {
     const mid = row.memoryId as string;
     const eid = row.entityId as string;
     const entityHop = entityHopMap.get(eid) ?? 0;
+    const entityWeight = entityWeightMap.get(eid) ?? 0.5;
     const prev = memHopMap.get(mid);
-    if (prev === undefined || entityHop < prev) memHopMap.set(mid, entityHop);
+    if (prev === undefined || entityHop < prev) {
+      memHopMap.set(mid, entityHop);
+      memWeightMap.set(mid, entityWeight);
+    } else if (entityHop === prev && entityWeight > (memWeightMap.get(mid) ?? 0)) {
+      memWeightMap.set(mid, entityWeight);
+    }
   }
 
-  return [...memHopMap.entries()].map(([memoryId, hopDistance]) => ({ memoryId, hopDistance }));
+  return [...memHopMap.entries()].map(([memoryId, hopDistance]) => ({
+    memoryId,
+    hopDistance,
+    avgWeight: memWeightMap.get(memoryId) ?? 0.5,
+  }));
 }

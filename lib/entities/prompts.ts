@@ -34,12 +34,15 @@ For each relationship between entities, provide:
 - target: Name of the target entity (must match an entity name above)
 - type: Relationship type in UPPER_SNAKE_CASE (e.g. WORKS_AT, USES, DEPENDS_ON, LOCATED_IN, CREATED_BY, MANAGES, PART_OF)
 - description: A brief description of the relationship (1 sentence max)
+- weight: Relationship strength from 0.0 to 1.0 based on how strongly the entities are connected.
+  1.0 = definitive/permanent (e.g. "is the CEO of"), 0.7-0.9 = strong (e.g. "works at", "depends on"),
+  0.4-0.6 = moderate (e.g. "sometimes uses", "is related to"), 0.1-0.3 = weak/tentative (e.g. "might be interested in").
 - metadata: (optional) A flat JSON object with domain-specific structured attributes on the relationship.
   Examples: {"since": "2024-01", "role": "Senior Engineer"}, {"dosage": "500mg", "frequency": "twice daily"}.
   Omit metadata entirely if no structured attributes are stated.
 
 Return ONLY valid JSON:
-{"entities": [{"name": "...", "type": "...", "description": "...", "metadata": {...}}], "relationships": [{"source": "...", "target": "...", "type": "...", "description": "...", "metadata": {...}}]}
+{"entities": [{"name": "...", "type": "...", "description": "...", "metadata": {...}}], "relationships": [{"source": "...", "target": "...", "type": "...", "description": "...", "weight": 0.8, "metadata": {...}}]}
 If no entities found, return {"entities": [], "relationships": []}`;
 
 // ---------------------------------------------------------------------------

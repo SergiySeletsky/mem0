@@ -142,3 +142,74 @@ describe("extractEntitiesAndRelationships — P3 previous context", () => {
     expect(userMsg!.content).not.toContain("mem5");
   });
 });
+
+describe("extractEntitiesAndRelationships — P3 edge weight", () => {
+  it("EXTRACT_08: relationship weight is preserved when valid", async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            entities: [
+              { name: "Alice", type: "PERSON", description: "Engineer" },
+              { name: "Acme", type: "ORGANIZATION", description: "Company" },
+            ],
+            relationships: [
+              { source: "Alice", target: "Acme", type: "WORKS_AT", description: "Employee", weight: 0.85 },
+            ],
+          }),
+        },
+      }],
+    });
+
+    const result = await extractEntitiesAndRelationships("Alice works at Acme");
+
+    expect(result.relationships).toHaveLength(1);
+    expect(result.relationships[0].weight).toBe(0.85);
+  });
+
+  it("EXTRACT_09: weight clamped to [0,1] range", async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            entities: [
+              { name: "A", type: "PERSON", description: "a" },
+              { name: "B", type: "PERSON", description: "b" },
+            ],
+            relationships: [
+              { source: "A", target: "B", type: "KNOWS", description: "friends", weight: 1.5 },
+            ],
+          }),
+        },
+      }],
+    });
+
+    const result = await extractEntitiesAndRelationships("A and B");
+
+    // Weight > 1.0 should be clamped to 1.0
+    expect(result.relationships[0].weight).toBeLessThanOrEqual(1.0);
+  });
+
+  it("EXTRACT_10: missing weight is undefined (not forced)", async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            entities: [
+              { name: "X", type: "CONCEPT", description: "x" },
+              { name: "Y", type: "CONCEPT", description: "y" },
+            ],
+            relationships: [
+              { source: "X", target: "Y", type: "RELATED_TO", description: "connected" },
+            ],
+          }),
+        },
+      }],
+    });
+
+    const result = await extractEntitiesAndRelationships("X and Y are related");
+
+    // Missing weight should result in undefined (relate.ts defaults to 0.5)
+    expect(result.relationships[0].weight).toBeUndefined();
+  });
+});

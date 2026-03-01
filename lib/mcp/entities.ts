@@ -26,12 +26,18 @@ export interface EntityProfile {
   type: string;
   description: string | null;
   metadata: Record<string, unknown>;
+  /** Degree centrality rank (MENTIONS + RELATED_TO count). Higher = more connected. */
+  rank: number;
+  /** LLM-generated entity profile summary (when available). */
+  summary: string | null;
   memoryCount: number;
   relationships: Array<{
     source: string;
     type: string;
     target: string;
     description: string | null;
+    /** LLM-assessed relationship strength: 0.0–1.0. */
+    weight: number;
     metadata: Record<string, unknown>;
   }>;
 }
@@ -72,6 +78,8 @@ export async function searchEntities(
     type: string;
     description: string | null;
     metadata: string | null;
+    rank: number;
+    summary: string | null;
     memoryCount: number;
   }>(
     `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity)
@@ -83,7 +91,8 @@ export async function searchEntities(
      WHERE m.invalidAt IS NULL
      WITH e, count(m) AS memoryCount
      RETURN e.id AS id, e.name AS name, e.type AS type,
-            e.description AS description, e.metadata AS metadata, memoryCount
+            e.description AS description, e.metadata AS metadata,
+            coalesce(e.rank, 0) AS rank, e.summary AS summary, memoryCount
      ORDER BY memoryCount DESC
      LIMIT $limit`,
     params,
@@ -107,6 +116,8 @@ export async function searchEntities(
       type: string;
       description: string | null;
       metadata: string | null;
+      rank: number;
+      summary: string | null;
       memoryCount: number;
     }>(
       `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity)
@@ -119,7 +130,8 @@ export async function searchEntities(
        ORDER BY similarity DESC
        LIMIT $limit
        RETURN e.id AS id, e.name AS name, e.type AS type,
-              e.description AS description, e.metadata AS metadata, memoryCount`,
+              e.description AS description, e.metadata AS metadata,
+              coalesce(e.rank, 0) AS rank, e.summary AS summary, memoryCount`,
       semParams,
     );
   } catch {
@@ -145,6 +157,7 @@ export async function searchEntities(
         relType: string;
         targetName: string;
         description: string | null;
+        weight: number;
         metadata: string | null;
       }>(
         `UNWIND $entityIds AS eid
@@ -154,7 +167,7 @@ export async function searchEntities(
          WHERE r IS NOT NULL
          RETURN eid AS entityId, center.name AS sourceName, r.type AS relType,
                 tgt.name AS targetName, r.description AS description,
-                r.metadata AS metadata
+                coalesce(r.weight, 0.5) AS weight, r.metadata AS metadata
          UNION ALL
          UNWIND $entityIds AS eid
          MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(center:Entity {id: eid})
@@ -163,7 +176,7 @@ export async function searchEntities(
          WHERE r IS NOT NULL
          RETURN eid AS entityId, src.name AS sourceName, r.type AS relType,
                 center.name AS targetName, r.description AS description,
-                r.metadata AS metadata`,
+                coalesce(r.weight, 0.5) AS weight, r.metadata AS metadata`,
         { userId, entityIds },
       )
     : [];
@@ -177,6 +190,7 @@ export async function searchEntities(
       type: r.relType,
       target: r.targetName,
       description: r.description,
+      weight: typeof r.weight === "number" ? r.weight : 0.5,
       metadata: parseMetadata(r.metadata),
     });
     relMap.set(r.entityId, list);
@@ -185,6 +199,8 @@ export async function searchEntities(
   const results: EntityProfile[] = merged.slice(0, effectiveLimit).map((entity) => ({
     ...entity,
     metadata: parseMetadata(entity.metadata),
+    rank: typeof entity.rank === "number" ? entity.rank : 0,
+    summary: entity.summary ?? null,
     relationships: relMap.get(entity.id) ?? [],
   }));
 

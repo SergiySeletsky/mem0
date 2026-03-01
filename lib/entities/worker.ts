@@ -24,6 +24,7 @@ import { linkMemoryToEntity } from "./link";
 import { linkEntities } from "./relate";
 import { summarizeEntityDescription } from "./summarize-description";
 import { generateEntitySummary, getEntityMentionCount, SUMMARY_THRESHOLD } from "./summarize-entity";
+import { updateEntityRank } from "./rank";
 
 /** Local copy — avoids dependency on resolve.ts being mocked in tests. */
 function normalizeName(name: string): string {
@@ -109,7 +110,7 @@ export async function processEntityExtraction(memoryId: string): Promise<void> {
       const sourceId = entityNameToId.get(rel.source.toLowerCase());
       const targetId = entityNameToId.get(rel.target.toLowerCase());
       if (sourceId && targetId && sourceId !== targetId) {
-        await linkEntities(sourceId, targetId, rel.type, rel.description, rel.source, rel.target, rel.metadata);
+        await linkEntities(sourceId, targetId, rel.type, rel.description, rel.source, rel.target, rel.metadata, rel.weight);
       }
     }
 
@@ -149,7 +150,16 @@ export async function processEntityExtraction(memoryId: string): Promise<void> {
       }
     }
 
-    // Step 10: mark done
+    // Step 10: Update entity rank (degree centrality) for all entities in this memory.
+    // Fire-and-forget — failures logged but never block the pipeline.
+    const allEntityIds = [...new Set([...entityNameToId.values()])];
+    for (const eid of allEntityIds) {
+      updateEntityRank(eid).catch((err: unknown) =>
+        console.warn("[worker] updateEntityRank failed:", err)
+      );
+    }
+
+    // Step 11: mark done
     await runWrite(
       `MATCH (m:Memory {id: $memoryId}) SET m.extractionStatus = 'done'`,
       { memoryId }

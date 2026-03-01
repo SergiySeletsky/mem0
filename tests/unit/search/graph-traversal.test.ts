@@ -186,14 +186,16 @@ describe("traverseEntityGraph", () => {
     mockRunRead.mockResolvedValueOnce([{ entityId: "e1" }]);
     // Step 1b: relationship search — no matches
     mockRunRead.mockResolvedValueOnce([]);
+    // P4: community priming — no matches
+    mockRunRead.mockResolvedValueOnce([]);
     // Step 2: expand — seed at hop 0 (no neighbors)
-    mockRunRead.mockResolvedValueOnce([{ entityId: "e1", hops: 0 }]);
+    mockRunRead.mockResolvedValueOnce([{ entityId: "e1", hops: 0, avgWeight: 1.0 }]);
     // Step 3: memories connected to entities
     mockRunRead.mockResolvedValueOnce([{ memoryId: "m1", entityId: "e1" }]);
 
     const results = await traverseEntityGraph("dr john treatment", USER_ID);
 
-    expect(results).toEqual([{ memoryId: "m1", hopDistance: 0 }]);
+    expect(results).toEqual([{ memoryId: "m1", hopDistance: 0, avgWeight: 1.0 }]);
     // Step 1 query should search name, description, AND metadata
     const step1Cypher = mockRunRead.mock.calls[0][0] as string;
     expect(step1Cypher).toContain("e.name");
@@ -206,12 +208,13 @@ describe("traverseEntityGraph", () => {
     // "5mg" matches in entity metadata (e.g., dosage info stored as JSON)
     mockRunRead.mockResolvedValueOnce([{ entityId: "e-ozempic" }]);
     mockRunRead.mockResolvedValueOnce([]);
-    mockRunRead.mockResolvedValueOnce([{ entityId: "e-ozempic", hops: 0 }]);
+    mockRunRead.mockResolvedValueOnce([]); // community priming
+    mockRunRead.mockResolvedValueOnce([{ entityId: "e-ozempic", hops: 0, avgWeight: 1.0 }]);
     mockRunRead.mockResolvedValueOnce([{ memoryId: "m-prescription", entityId: "e-ozempic" }]);
 
     const results = await traverseEntityGraph("5mg ozempic", USER_ID);
 
-    expect(results).toEqual([{ memoryId: "m-prescription", hopDistance: 0 }]);
+    expect(results).toEqual([{ memoryId: "m-prescription", hopDistance: 0, avgWeight: 1.0 }]);
     // Verify terms are passed to the Cypher query
     const step1Params = mockRunRead.mock.calls[0][1] as Record<string, unknown>;
     expect(step1Params.terms).toContain("5mg");
@@ -224,10 +227,11 @@ describe("traverseEntityGraph", () => {
     mockRunRead.mockResolvedValueOnce([{ entityId: "e-john" }]);
     // No relationship metadata matches
     mockRunRead.mockResolvedValueOnce([]);
+    mockRunRead.mockResolvedValueOnce([]); // community priming
     // Expand: Dr. John at hop 0, neighbor "Patient Smith" at hop 1
     mockRunRead.mockResolvedValueOnce([
-      { entityId: "e-john", hops: 0 },
-      { entityId: "e-smith", hops: 1 },
+      { entityId: "e-john", hops: 0, avgWeight: 1.0 },
+      { entityId: "e-smith", hops: 1, avgWeight: 0.8 },
     ]);
     // Memories from both entities — includes Smith's memory
     mockRunRead.mockResolvedValueOnce([
@@ -254,17 +258,18 @@ describe("traverseEntityGraph", () => {
       { entityId: "e-doctor" },
       { entityId: "e-patient" },
     ]);
+    mockRunRead.mockResolvedValueOnce([]); // community priming
     // Expand: both entities + no new neighbors
     mockRunRead.mockResolvedValueOnce([
-      { entityId: "e-doctor", hops: 0 },
-      { entityId: "e-patient", hops: 0 },
+      { entityId: "e-doctor", hops: 0, avgWeight: 1.0 },
+      { entityId: "e-patient", hops: 0, avgWeight: 1.0 },
     ]);
     // Memories
     mockRunRead.mockResolvedValueOnce([{ memoryId: "m-prescription", entityId: "e-doctor" }]);
 
     const results = await traverseEntityGraph("ozempic prescription", USER_ID);
 
-    expect(results).toEqual([{ memoryId: "m-prescription", hopDistance: 0 }]);
+    expect(results).toEqual([{ memoryId: "m-prescription", hopDistance: 0, avgWeight: 1.0 }]);
     // Step 1b query should search relationship type, description, and metadata
     const step1bCypher = mockRunRead.mock.calls[1][0] as string;
     expect(step1bCypher).toContain("r.type");
@@ -276,12 +281,13 @@ describe("traverseEntityGraph", () => {
     mockLLMTerms(["quantum", "blockchain"]);
     mockRunRead.mockResolvedValueOnce([]); // no entity matches
     mockRunRead.mockResolvedValueOnce([]); // no relationship matches
+    mockRunRead.mockResolvedValueOnce([]); // community priming — no matches
 
     const results = await traverseEntityGraph("quantum blockchain", USER_ID);
 
     expect(results).toEqual([]);
     // Should NOT call Step 2 or Step 3 when no seeds found
-    expect(mockRunRead).toHaveBeenCalledTimes(2);
+    expect(mockRunRead).toHaveBeenCalledTimes(3);
   });
 
   it("GRAPH_06: returns empty for all-short-token query (regex fallback)", async () => {
@@ -307,11 +313,12 @@ describe("traverseEntityGraph", () => {
       { entityId: "e2" },
       { entityId: "e3" },
     ]);
+    mockRunRead.mockResolvedValueOnce([]); // community priming
     // Expand: 3 unique entities (not 4)
     mockRunRead.mockResolvedValueOnce([
-      { entityId: "e1", hops: 0 },
-      { entityId: "e2", hops: 0 },
-      { entityId: "e3", hops: 0 },
+      { entityId: "e1", hops: 0, avgWeight: 1.0 },
+      { entityId: "e2", hops: 0, avgWeight: 1.0 },
+      { entityId: "e3", hops: 0, avgWeight: 1.0 },
     ]);
     // Memories
     mockRunRead.mockResolvedValueOnce([{ memoryId: "m1", entityId: "e1" }]);
@@ -319,18 +326,19 @@ describe("traverseEntityGraph", () => {
     const results = await traverseEntityGraph("test query terms", USER_ID);
 
     // Step 2 (expand) should receive 3 unique seed IDs, not 4
-    const expandParams = mockRunRead.mock.calls[2][1] as Record<string, unknown>;
+    const expandParams = mockRunRead.mock.calls[3][1] as Record<string, unknown>;
     const seedIds = expandParams.seedIds as string[];
     expect(seedIds).toHaveLength(3);
     expect(new Set(seedIds).size).toBe(3);
-    expect(results).toEqual([{ memoryId: "m1", hopDistance: 0 }]);
+    expect(results).toEqual([{ memoryId: "m1", hopDistance: 0, avgWeight: 1.0 }]);
   });
 
   it("GRAPH_08: respects limit parameter", async () => {
     mockLLMTerms(["test", "query"]);
     mockRunRead.mockResolvedValueOnce([{ entityId: "e1" }]);
     mockRunRead.mockResolvedValueOnce([]);
-    mockRunRead.mockResolvedValueOnce([{ entityId: "e1", hops: 0 }]);
+    mockRunRead.mockResolvedValueOnce([]); // community priming
+    mockRunRead.mockResolvedValueOnce([{ entityId: "e1", hops: 0, avgWeight: 1.0 }]);
     mockRunRead.mockResolvedValueOnce([
       { memoryId: "m1", entityId: "e1" },
       { memoryId: "m2", entityId: "e1" },
@@ -339,7 +347,7 @@ describe("traverseEntityGraph", () => {
     const results = await traverseEntityGraph("test query", USER_ID, { limit: 5 });
 
     // Verify limit is passed to the final query
-    const step3Params = mockRunRead.mock.calls[3][1] as Record<string, unknown>;
+    const step3Params = mockRunRead.mock.calls[4][1] as Record<string, unknown>;
     expect(step3Params.limit).toBe(5);
     expect(results).toHaveLength(2);
   });
@@ -350,14 +358,15 @@ describe("traverseEntityGraph", () => {
     mockRunRead.mockResolvedValueOnce([{ entityId: "e1" }]);
     // Relationship search throws
     mockRunRead.mockRejectedValueOnce(new Error("Cypher error"));
+    mockRunRead.mockResolvedValueOnce([]); // community priming
     // Expand still works with entity arm seeds
-    mockRunRead.mockResolvedValueOnce([{ entityId: "e1", hops: 0 }]);
+    mockRunRead.mockResolvedValueOnce([{ entityId: "e1", hops: 0, avgWeight: 1.0 }]);
     // Memories
     mockRunRead.mockResolvedValueOnce([{ memoryId: "m1", entityId: "e1" }]);
 
     const results = await traverseEntityGraph("test terms", USER_ID);
 
-    expect(results).toEqual([{ memoryId: "m1", hopDistance: 0 }]);
+    expect(results).toEqual([{ memoryId: "m1", hopDistance: 0, avgWeight: 1.0 }]);
   });
 
   it("GRAPH_10: LLM failure in traversal falls back to regex terms", async () => {
@@ -365,12 +374,13 @@ describe("traverseEntityGraph", () => {
     // Regex fallback produces ["ozempic", "prescription"]
     mockRunRead.mockResolvedValueOnce([{ entityId: "e1" }]);
     mockRunRead.mockResolvedValueOnce([]);
-    mockRunRead.mockResolvedValueOnce([{ entityId: "e1", hops: 0 }]);
+    mockRunRead.mockResolvedValueOnce([]); // community priming
+    mockRunRead.mockResolvedValueOnce([{ entityId: "e1", hops: 0, avgWeight: 1.0 }]);
     mockRunRead.mockResolvedValueOnce([{ memoryId: "m1", entityId: "e1" }]);
 
     const results = await traverseEntityGraph("ozempic prescription", USER_ID);
 
-    expect(results).toEqual([{ memoryId: "m1", hopDistance: 0 }]);
+    expect(results).toEqual([{ memoryId: "m1", hopDistance: 0, avgWeight: 1.0 }]);
     // Verify regex-extracted terms were used
     const step1Params = mockRunRead.mock.calls[0][1] as Record<string, unknown>;
     expect(step1Params.terms).toContain("ozempic");
@@ -382,11 +392,12 @@ describe("traverseEntityGraph", () => {
     // Seed: entity "Alice"
     mockRunRead.mockResolvedValueOnce([{ entityId: "e-alice" }]);
     mockRunRead.mockResolvedValueOnce([]);
+    mockRunRead.mockResolvedValueOnce([]); // community priming
     // Expand: Alice at hop 0, Bob at hop 1, Charlie at hop 2
     mockRunRead.mockResolvedValueOnce([
-      { entityId: "e-alice", hops: 0 },
-      { entityId: "e-bob", hops: 1 },
-      { entityId: "e-charlie", hops: 2 },
+      { entityId: "e-alice", hops: 0, avgWeight: 1.0 },
+      { entityId: "e-bob", hops: 1, avgWeight: 0.8 },
+      { entityId: "e-charlie", hops: 2, avgWeight: 0.6 },
     ]);
     // Memories from all 3 entities
     mockRunRead.mockResolvedValueOnce([
@@ -402,7 +413,7 @@ describe("traverseEntityGraph", () => {
     expect(results.find((r) => r.memoryId === "m-bob")!.hopDistance).toBe(1);
     expect(results.find((r) => r.memoryId === "m-charlie")!.hopDistance).toBe(2);
     // Verify the expand Cypher uses variable-length path
-    const expandCypher = mockRunRead.mock.calls[2][0] as string;
+    const expandCypher = mockRunRead.mock.calls[3][0] as string;
     expect(expandCypher).toContain("RELATED_TO*1..");
   });
 
@@ -410,13 +421,14 @@ describe("traverseEntityGraph", () => {
     mockLLMTerms(["test"]);
     mockRunRead.mockResolvedValueOnce([{ entityId: "e1" }]);
     mockRunRead.mockResolvedValueOnce([]);
-    mockRunRead.mockResolvedValueOnce([{ entityId: "e1", hops: 0 }]);
+    mockRunRead.mockResolvedValueOnce([]); // community priming
+    mockRunRead.mockResolvedValueOnce([{ entityId: "e1", hops: 0, avgWeight: 1.0 }]);
     mockRunRead.mockResolvedValueOnce([{ memoryId: "m1", entityId: "e1" }]);
 
     await traverseEntityGraph("test", USER_ID, { maxDepth: 3 });
 
     // The expand Cypher should contain *1..3
-    const expandCypher = mockRunRead.mock.calls[2][0] as string;
+    const expandCypher = mockRunRead.mock.calls[3][0] as string;
     expect(expandCypher).toContain("*1..3");
   });
 
@@ -428,13 +440,14 @@ describe("traverseEntityGraph", () => {
       { entityId: "e-b" },
     ]);
     mockRunRead.mockResolvedValueOnce([]);
+    mockRunRead.mockResolvedValueOnce([]); // community priming
     // Entity "e-shared" reachable at hop 1 from e-a and hop 2 from e-b
     // The UNION query returns both, but we keep the minimum
     mockRunRead.mockResolvedValueOnce([
-      { entityId: "e-a", hops: 0 },
-      { entityId: "e-b", hops: 0 },
-      { entityId: "e-shared", hops: 1 },
-      { entityId: "e-shared", hops: 2 },
+      { entityId: "e-a", hops: 0, avgWeight: 1.0 },
+      { entityId: "e-b", hops: 0, avgWeight: 1.0 },
+      { entityId: "e-shared", hops: 1, avgWeight: 0.8 },
+      { entityId: "e-shared", hops: 2, avgWeight: 0.5 },
     ]);
     // Memory connected to shared entity
     mockRunRead.mockResolvedValueOnce([{ memoryId: "m-shared", entityId: "e-shared" }]);

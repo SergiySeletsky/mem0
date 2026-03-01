@@ -23,6 +23,8 @@ export interface ExtractedRelationship {
   target: string;
   type: string;
   description: string;
+  /** LLM-assessed relationship strength: 0.0 (weak) to 1.0 (definitive). */
+  weight?: number;
   /** Domain-specific structured properties on the relationship. */
   metadata?: Record<string, unknown>;
 }
@@ -70,10 +72,15 @@ function normalizeExtractedRelationships(input: unknown): ExtractedRelationship[
     const description = typeof maybe?.description === "string"
       ? maybe.description.trim()
       : "";
+    // Parse weight: clamp to [0, 1], default to undefined if missing/invalid
+    let weight: number | undefined;
+    if (typeof maybe?.weight === "number" && isFinite(maybe.weight)) {
+      weight = Math.max(0, Math.min(1, maybe.weight));
+    }
     const metadata = (typeof maybe?.metadata === "object" && maybe.metadata !== null && !Array.isArray(maybe.metadata))
       ? maybe.metadata as Record<string, unknown>
       : undefined;
-    result.push({ source, target, type, description, ...(metadata ? { metadata } : {}) });
+    result.push({ source, target, type, description, ...(weight !== undefined ? { weight } : {}), ...(metadata ? { metadata } : {}) });
   }
   return result;
 }

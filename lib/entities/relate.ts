@@ -25,6 +25,7 @@ export interface ExtractedRelationship {
   target: string;
   type: string;
   description: string;
+  weight?: number;
 }
 
 export type EdgeVerdict = "SAME" | "UPDATE" | "CONTRADICTION";
@@ -100,7 +101,8 @@ export async function linkEntities(
   description: string = "",
   sourceName: string = "",
   targetName: string = "",
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
+  weight?: number
 ): Promise<void> {
   const normalizedRelType = relType.toUpperCase().replace(/\s+/g, "_");
   const now = new Date().toISOString();
@@ -158,6 +160,11 @@ export async function linkEntities(
   }
 
   // Step 2: Create new edge (either fresh or replacement for invalidated one)
+  // weight defaults to 0.5 (moderate) if not provided by LLM
+  const effectiveWeight = weight !== undefined && isFinite(weight)
+    ? Math.max(0, Math.min(1, weight))
+    : 0.5;
+
   await runWrite(
     `MATCH (src:Entity {id: $sourceId})
      MATCH (tgt:Entity {id: $targetId})
@@ -165,6 +172,7 @@ export async function linkEntities(
        type: $relType,
        description: $desc,
        metadata: $metadata,
+       weight: $weight,
        validAt: $now,
        createdAt: $now,
        updatedAt: $now
@@ -176,6 +184,7 @@ export async function linkEntities(
       relType: normalizedRelType,
       desc: description,
       metadata: mergedMeta,
+      weight: effectiveWeight,
       now,
     }
   );
