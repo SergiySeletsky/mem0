@@ -91,6 +91,15 @@ const addMemoriesSchema = {
       "Skip automatic category suggestions. Auto-defaults to true when you provide explicit categories " +
       "for predictable grouping. Set explicitly to false to keep auto-enrichment alongside your categories."
     ),
+  replaces: z
+    .string()
+    .optional()
+    .describe(
+      "Memory ID to explicitly supersede. When provided, the new content directly replaces the specified " +
+      "memory (bypassing automatic dedup detection). Use when updating an evolving fact, plan, or status " +
+      "where automatic detection may not recognize the relationship. " +
+      "Get the ID from a prior search_memory result."
+    ),
 };
 
 export function createMcpServer(userId: string, clientName: string): McpServer {
@@ -103,8 +112,9 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
       description:
         "Store information in long-term memory. Use this PROACTIVELY — save any facts, " +
         "decisions, preferences, patterns, or insights worth remembering across conversations.\n\n" +
-        "What to store: user preferences, architecture decisions, project conventions, " +
-        "problem solutions, relationships between concepts, workflow patterns, debug findings.\n\n" +
+        "What to store: personal preferences, important decisions, people and relationships, " +
+        "plans and goals, health and wellness notes, learning insights, professional details, " +
+        "travel plans, financial decisions, creative ideas — anything worth recalling later.\n\n" +
         "The system understands natural language intent:\n" +
         "• Statements → remembered (duplicates automatically detected and merged)\n" +
         "• 'Forget X' / 'Remove memories about Y' → matching memories removed\n" +
@@ -114,7 +124,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         "Accepts a single string or an array for batch writes.",
       inputSchema: addMemoriesSchema,
     },
-    async ({ content, categories: explicitCategories, tags: explicitTags, suppress_auto_categories: suppressAutoCategories }) => {
+    async ({ content, categories: explicitCategories, tags: explicitTags, suppress_auto_categories: suppressAutoCategories, replaces: replacesId }) => {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
       if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
 
@@ -218,15 +228,43 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
             }
 
             // Step 1: Deduplication pre-write hook (STORE intent)
-            // MCP-BATCH-DEDUP: Check for intra-batch exact duplicate first
             const normalizedText = normalizeBatchText(text);
+
+            // EXPLICIT REPLACES: When caller provides a memory ID to supersede,
+            // bypass dedup entirely and go straight to supersedeMemory.
+            // This handles evolving plans, lab results, itinerary changes, etc.
+            // where automatic dedup detection may not recognize the relationship.
+            if (replacesId) {
+              console.log(`[MCP] add_memories explicit replaces -- superseding ${replacesId}`);
+              const id = await supersedeMemory(replacesId, text, userId, clientName, explicitTags);
+
+              // Write explicit categories if provided
+              if (explicitCategories && explicitCategories.length > 0) {
+                await runWrite(
+                  `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memId})
+                   WITH m
+                   UNWIND $categories AS catName
+                   MERGE (c:Category {name: catName})
+                   MERGE (m)-[:HAS_CATEGORY]->(c)`,
+                  { userId, memId: id, categories: explicitCategories }
+                ).catch((e: unknown) => console.warn("[explicit categories]", e));
+              }
+
+              prevExtractionPromise = processEntityExtraction(id)
+                .catch((e: unknown) => console.warn("[entity worker]", e));
+              batchSeenTexts.add(normalizedText);
+              results.push({ id, memory: text, event: "SUPERSEDE" });
+              continue;
+            }
+
+            // MCP-BATCH-DEDUP: Check for intra-batch exact duplicate first
             if (batchSeenTexts.has(normalizedText)) {
               console.log(`[MCP] add_memories intra-batch skip -- exact duplicate within batch`);
               results.push({ id: null as unknown as string, memory: text, event: "SKIP_DUPLICATE" });
               continue;
             }
 
-            const dedup = await checkDeduplication(text, userId);
+            const dedup = await checkDeduplication(text, userId, explicitTags);
 
             if (dedup.action === "skip") {
               console.log(`[MCP] add_memories dedup skip -- duplicate of ${dedup.existingId}`);
@@ -368,7 +406,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
     "search_memory",
     {
       description:
-        "Recall from long-term memory. Use BEFORE making decisions, writing code, or answering " +
+        "Recall from long-term memory. Use BEFORE making decisions or answering " +
         "questions — always check what's already known first.\n\n" +
         "Two modes:\n" +
         "• With query: finds the most relevant memories and surfaces related entities with " +
@@ -554,9 +592,6 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
                     id: r.id,
                     memory: r.content,
                     relevance_score: normalizedScore,
-                    raw_score: r.rrfScore,
-                    text_rank: r.textRank,
-                    vector_rank: r.vectorRank,
                     ...buildDateFields(r.createdAt, r.updatedAt ?? r.createdAt, now),
                     categories: r.categories,
                     tags: r.tags ?? [],

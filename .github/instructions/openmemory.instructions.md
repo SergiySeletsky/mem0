@@ -24,8 +24,9 @@ The system understands natural language intent:
 |-------|------|----------|-------------|
 | `content` | `string \| string[]` | Yes | What to remember. Single string or array for batch writes. |
 | `categories` | `string[]` | | Semantic labels for organization (e.g. `["Architecture", "Security"]`). Auto-assigned when omitted. When provided, `suppress_auto_categories` auto-defaults to `true`. |
-| `tags` | `string[]` | | Exact identifiers you control for precise filtering (e.g. `["project-x", "session-5"]`). Never auto-assigned. |
+| `tags` | `string[]` | | Exact identifiers you control for precise filtering (e.g. `["project-x", "session-5"]`). Never auto-assigned. Also used for tag-aware dedup — memories sharing tags are preferred over cross-domain matches. |
 | `suppress_auto_categories` | `boolean` | | Skip automatic category suggestions. Auto-defaults to `true` when `categories` is provided. Set explicitly to `false` to keep LLM enrichment alongside your categories. |
+| `replaces` | `string` | | Memory ID to explicitly supersede. Bypasses automatic dedup and directly replaces the specified memory. Use for evolving plans, lab results, itinerary changes, or any update where auto-detection may miss the relationship. Get the ID from a prior `search_memory` result. |
 
 **Response (minimal -- no input echo):**
 ```jsonc
@@ -44,7 +45,7 @@ Only non-zero counts appear. `ids` covers stored + superseded items. Errors carr
 
 ## search_memory -- Recall
 
-Find what's already known. **Use BEFORE making decisions, writing code, or answering questions.**
+Find what's already known. **Use BEFORE making decisions or answering questions.**
 
 Two modes:
 - **With query:** finds the most relevant memories and surfaces related entities with their connections. Use natural language -- be specific.
@@ -98,14 +99,15 @@ Two modes:
 
 | Situation | Tool | Example |
 |-----------|------|---------|
-| Starting a new task | `search_memory` | Check for existing patterns, prior decisions |
-| Making a design decision | `search_memory` then `add_memories` | Search first, then store the decision |
-| Finished implementing something | `add_memories` | Store the approach, patterns, gotchas |
-| Hit a bug or edge case | `search_memory` then `add_memories` | Check for known issues, then store the solution |
+| Starting a conversation | `search_memory` | Check for known preferences, prior context |
+| Learning something new about the user | `add_memories` | Store the preference, fact, or decision |
+| User makes a decision | `search_memory` then `add_memories` | Check related context, then store the decision |
+| User shares personal details | `add_memories` | Store relationships, preferences, important dates |
 | Want to see everything stored | `search_memory` (no query) | Browse mode -- full inventory |
-| Need project-specific context | `search_memory(tag: "repo-name")` | Filter to one project |
-| Confirming a prior finding still applies | `add_memories` | `"Still relevant: auth uses JWT"` -- refreshes timestamp |
-| Marking a tracked issue as fixed | `add_memories` | `"Resolved: CORS bug in /api/health"` -- archives the memory |
+| Need topic-specific context | `search_memory(tag: "topic")` | Filter to one topic or project |
+| Confirming a prior fact still applies | `add_memories` | `"Still relevant: prefers vegetarian meals"` -- refreshes timestamp |
+| Marking something as no longer relevant | `add_memories` | `"Resolved: recovered from knee injury"` -- archives the memory |
+| Updating an evolving plan or status | `add_memories(replaces: "id")` | Explicitly supersede a specific memory by ID |
 
 **Key principle:** Search 2-3 times with different phrasings before acting. Memory recall improves with varied queries.
 
@@ -113,8 +115,8 @@ Two modes:
 
 ## Query Guidance
 
-- **Be specific:** "What authentication pattern does this project use?" not "auth"
-- **Add context:** "How are entities deduplicated during extraction?" not "entity dedup"
+- **Be specific:** "What dietary restrictions does the user have?" not "food"
+- **Add context:** "What was the decision about the vacation destination?" not "vacation"
 - **Vary phrasings:** search from different angles to maximize recall
 - **Browse first:** on cold-start, browse (no query) to see what's available
 
@@ -122,8 +124,8 @@ Two modes:
 
 ## What to Store
 
-**Store:** Architecture decisions, problem-solving strategies, component relationships, implementation patterns, debug solutions, non-obvious behaviors, multi-file workflows.
-**Skip:** Trivial one-line fixes, information already in code comments.
+**Store:** Important decisions, personal preferences, relationships between people or concepts, goals and plans, health and wellness notes, learning progress, professional details, travel plans, financial decisions, non-obvious insights, recurring patterns.
+**Skip:** Trivial ephemeral details, information the user explicitly asked not to remember.
 
 ---
 

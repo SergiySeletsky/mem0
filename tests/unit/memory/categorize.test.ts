@@ -50,14 +50,43 @@ describe("categorizeMemory", () => {
     expect(firstParams.names).toEqual(["Personal", "Work"]);
   });
 
-  test("CAT_02: filters out invalid category names", async () => {
-    mockCreate.mockResolvedValue(llmReply('["Personal","InvalidCat","Travel"]'));
+  test("CAT_02: accepts any well-formed category (open ontology)", async () => {
+    mockCreate.mockResolvedValue(llmReply('["Personal","CustomDomain","Travel"]'));
     await categorizeMemory("mem-1", "trip plans");
 
-    // Only Personal + Travel are valid — single batch call
+    // All three are valid — open ontology accepts any well-formed string
     expect(mockRunWrite).toHaveBeenCalledTimes(1);
     const params = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
-    expect(params.names).toEqual(["Personal", "Travel"]);
+    expect(params.names).toEqual(["Personal", "CustomDomain", "Travel"]);
+  });
+
+  test("CAT_02b: sanitizes categories — trims whitespace and deduplicates", async () => {
+    mockCreate.mockResolvedValue(llmReply('[" Personal ", "personal", "Work"]'));
+    await categorizeMemory("mem-1", "dedup test");
+
+    expect(mockRunWrite).toHaveBeenCalledTimes(1);
+    const params = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
+    // "Personal" trimmed, second "personal" is case-insensitive duplicate
+    expect(params.names).toEqual(["Personal", "Work"]);
+  });
+
+  test("CAT_02c: filters out non-string and over-length categories", async () => {
+    const longCat = "A".repeat(51);
+    mockCreate.mockResolvedValue(llmReply(`["Valid", ${JSON.stringify(longCat)}, "", "Also Valid"]`));
+    await categorizeMemory("mem-1", "length test");
+
+    expect(mockRunWrite).toHaveBeenCalledTimes(1);
+    const params = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
+    expect(params.names).toEqual(["Valid", "Also Valid"]);
+  });
+
+  test("CAT_02d: caps at 3 categories max", async () => {
+    mockCreate.mockResolvedValue(llmReply('["A","B","C","D","E"]'));
+    await categorizeMemory("mem-1", "many categories");
+
+    expect(mockRunWrite).toHaveBeenCalledTimes(1);
+    const params = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
+    expect(params.names).toEqual(["A", "B", "C"]);
   });
 
   test("CAT_03: handles JSON wrapped in extra text", async () => {

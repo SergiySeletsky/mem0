@@ -48,7 +48,7 @@ describe("checkDeduplication orchestrator", () => {
 
   it("ORCH_02: similar candidate found but LLM says DIFFERENT → action: insert", async () => {
     mockFind.mockResolvedValue([
-      { id: "mem-111", content: "I like dogs", score: 0.94 },
+      { id: "mem-111", content: "I like dogs", score: 0.94, tags: [] },
     ]);
     mockVerify.mockResolvedValue("DIFFERENT");
 
@@ -59,7 +59,7 @@ describe("checkDeduplication orchestrator", () => {
 
   it("ORCH_03: similar candidate + LLM says DUPLICATE → action: skip with existingId", async () => {
     mockFind.mockResolvedValue([
-      { id: "mem-222", content: "I prefer dark mode", score: 0.97 },
+      { id: "mem-222", content: "I prefer dark mode", score: 0.97, tags: [] },
     ]);
     mockVerify.mockResolvedValue("DUPLICATE");
 
@@ -73,7 +73,7 @@ describe("checkDeduplication orchestrator", () => {
 
   it("ORCH_04: similar candidate + LLM says SUPERSEDES → action: supersede with existingId", async () => {
     mockFind.mockResolvedValue([
-      { id: "mem-333", content: "I live in NYC", score: 0.93 },
+      { id: "mem-333", content: "I live in NYC", score: 0.93, tags: [] },
     ]);
     mockVerify.mockResolvedValue("SUPERSEDES");
 
@@ -108,7 +108,7 @@ describe("checkDeduplication orchestrator", () => {
     // Score 0.80 is above new threshold 0.75 but was below old threshold 0.85
     mockGetDedupConfig.mockResolvedValue({ enabled: true, threshold: 0.75, azureThreshold: 0.55, intelliThreshold: 0.55 });
     mockFind.mockResolvedValue([
-      { id: "mem-orig", content: "We chose Memgraph as the database layer", score: 0.80 },
+      { id: "mem-orig", content: "We chose Memgraph as the database layer", score: 0.80, tags: [] },
     ]);
     mockVerify.mockResolvedValue("DUPLICATE");
 
@@ -158,7 +158,7 @@ describe("checkDeduplication orchestrator", () => {
     // "I like coffee" vs "I don't like coffee" — LLM thinks DUPLICATE because
     // cosine similarity is very high, but the negation gate catches it.
     mockFind.mockResolvedValue([
-      { id: "mem-neg-1", content: "I like coffee", score: 0.98 },
+      { id: "mem-neg-1", content: "I like coffee", score: 0.98, tags: [] },
     ]);
     mockVerify.mockResolvedValue("DUPLICATE");
 
@@ -171,7 +171,7 @@ describe("checkDeduplication orchestrator", () => {
   it("ORCH_11: DUPLICATE without negation asymmetry → still skip (no false positive)", async () => {
     // Both affirm → no asymmetry → negation gate should NOT block
     mockFind.mockResolvedValue([
-      { id: "mem-pos-1", content: "I prefer dark mode", score: 0.97 },
+      { id: "mem-pos-1", content: "I prefer dark mode", score: 0.97, tags: [] },
     ]);
     mockVerify.mockResolvedValue("DUPLICATE");
 
@@ -187,7 +187,7 @@ describe("checkDeduplication orchestrator", () => {
     // "I no longer live in NYC" superseding "I live in NYC" is valid —
     // the negation gate should NOT block SUPERSEDES, only DUPLICATE.
     mockFind.mockResolvedValue([
-      { id: "mem-loc-1", content: "I live in NYC", score: 0.93 },
+      { id: "mem-loc-1", content: "I live in NYC", score: 0.93, tags: [] },
     ]);
     mockVerify.mockResolvedValue("SUPERSEDES");
 
@@ -201,12 +201,169 @@ describe("checkDeduplication orchestrator", () => {
 
   it("ORCH_13: LLM verification error falls through to insert (fail-open)", async () => {
     mockFind.mockResolvedValue([
-      { id: "mem-err-1", content: "some memory", score: 0.90 },
+      { id: "mem-err-1", content: "some memory", score: 0.90, tags: [] },
     ]);
     mockVerify.mockRejectedValue(new Error("LLM timeout"));
 
     const result = await checkDeduplication("updated memory", "user-1");
 
     expect(result.action).toBe("insert");
+  });
+
+  // ── Top-2 candidate verification (Finding 6: close score gap < 0.05) ──────
+
+  it("ORCH_14: runner-up within 0.05 gap is verified when top is DIFFERENT", async () => {
+    // Top candidate is DIFFERENT, but runner-up (within gap) is the true DUPLICATE
+    mockFind.mockResolvedValue([
+      { id: "mem-top", content: "I use VS Code for editing", score: 0.92, tags: [] },
+      { id: "mem-runner", content: "I prefer dark mode themes", score: 0.89, tags: [] },
+    ]);
+    // First verify call (top) → DIFFERENT, second (runner) → DUPLICATE
+    mockVerify
+      .mockResolvedValueOnce("DIFFERENT")
+      .mockResolvedValueOnce("DUPLICATE");
+
+    const result = await checkDeduplication("dark theme is my preference", "user-1");
+
+    expect(result.action).toBe("skip");
+    if (result.action === "skip") {
+      expect(result.existingId).toBe("mem-runner");
+    }
+    expect(mockVerify).toHaveBeenCalledTimes(2);
+  });
+
+  it("ORCH_15: runner-up NOT verified when score gap >= 0.05", async () => {
+    // Gap is 0.10 (>= 0.05) — only top candidate verified
+    mockFind.mockResolvedValue([
+      { id: "mem-top", content: "I use VS Code", score: 0.92, tags: [] },
+      { id: "mem-far", content: "unrelated", score: 0.82, tags: [] },
+    ]);
+    mockVerify.mockResolvedValueOnce("DIFFERENT");
+
+    const result = await checkDeduplication("something new", "user-1");
+
+    expect(result.action).toBe("insert");
+    expect(mockVerify).toHaveBeenCalledTimes(1);
+  });
+
+  it("ORCH_16: runner-up SUPERSEDES when top is DIFFERENT and gap < 0.05", async () => {
+    mockFind.mockResolvedValue([
+      { id: "mem-top", content: "old preference A", score: 0.91, tags: [] },
+      { id: "mem-runner", content: "I live in NYC", score: 0.88, tags: [] },
+    ]);
+    mockVerify
+      .mockResolvedValueOnce("DIFFERENT")
+      .mockResolvedValueOnce("SUPERSEDES");
+
+    const result = await checkDeduplication("I moved from NYC to London", "user-1");
+
+    expect(result.action).toBe("supersede");
+    if (result.action === "supersede") {
+      expect(result.existingId).toBe("mem-runner");
+    }
+  });
+
+  it("ORCH_17: runner-up DUPLICATE blocked by negation gate", async () => {
+    mockFind.mockResolvedValue([
+      { id: "mem-top", content: "unrelated fact", score: 0.90, tags: [] },
+      { id: "mem-runner", content: "I like coffee", score: 0.87, tags: [] },
+    ]);
+    mockVerify
+      .mockResolvedValueOnce("DIFFERENT")
+      .mockResolvedValueOnce("DUPLICATE");
+
+    const result = await checkDeduplication("I don't like coffee", "user-1");
+
+    // Negation gate blocks runner-up DUPLICATE
+    expect(result.action).toBe("insert");
+  });
+
+  // ── Tag-aware dedup boosting ──────────────────────────────────────────
+
+  it("ORCH_18: tag-aware boost promotes same-tag candidate above higher-scoring cross-domain candidate", async () => {
+    // Scenario: health memory stored with tag "health". Two candidates found:
+    // - mem-finance (0.95, tags: ["finance"]) — higher cosine, wrong domain
+    // - mem-health (0.90, tags: ["health"]) — lower cosine, same domain
+    // With tag-aware boost, mem-health should be verified first (promoted to front).
+    mockFind.mockResolvedValue([
+      { id: "mem-finance", content: "Budget for supplements", score: 0.95, tags: ["finance"] },
+      { id: "mem-health", content: "Takes vitamin D daily", score: 0.90, tags: ["health"] },
+    ]);
+    // First verify call (now mem-health due to boost) → SUPERSEDES
+    mockVerify.mockResolvedValueOnce("SUPERSEDES");
+
+    const result = await checkDeduplication(
+      "Takes vitamin D and magnesium daily",
+      "user-1",
+      ["health"]
+    );
+
+    expect(result.action).toBe("supersede");
+    if (result.action === "supersede") {
+      // The health candidate should be selected, not the finance one
+      expect(result.existingId).toBe("mem-health");
+    }
+    // Only 1 verify call — the promoted candidate matched immediately
+    expect(mockVerify).toHaveBeenCalledTimes(1);
+  });
+
+  it("ORCH_19: without tags, candidates retain original cosine order (no regression)", async () => {
+    // Same candidates as ORCH_18 but no tags provided — original order preserved.
+    mockFind.mockResolvedValue([
+      { id: "mem-finance", content: "Budget for supplements", score: 0.95, tags: ["finance"] },
+      { id: "mem-health", content: "Takes vitamin D daily", score: 0.90, tags: ["health"] },
+    ]);
+    // Top candidate (mem-finance) verified first → SUPERSEDES
+    mockVerify.mockResolvedValueOnce("SUPERSEDES");
+
+    const result = await checkDeduplication(
+      "Takes vitamin D and magnesium daily",
+      "user-1"
+      // no tags → no boosting
+    );
+
+    expect(result.action).toBe("supersede");
+    if (result.action === "supersede") {
+      // Without boost, highest cosine (finance) wins
+      expect(result.existingId).toBe("mem-finance");
+    }
+  });
+
+  it("ORCH_20: single candidate with matching tag — no reordering needed, still works", async () => {
+    mockFind.mockResolvedValue([
+      { id: "mem-only", content: "Prefers aisle seats", score: 0.91, tags: ["travel"] },
+    ]);
+    mockVerify.mockResolvedValueOnce("DUPLICATE");
+
+    const result = await checkDeduplication(
+      "I prefer aisle seats on flights",
+      "user-1",
+      ["travel"]
+    );
+
+    expect(result.action).toBe("skip");
+    if (result.action === "skip") {
+      expect(result.existingId).toBe("mem-only");
+    }
+  });
+
+  it("ORCH_21: tag-aware boost with case-insensitive matching", async () => {
+    // Tags differ in case: "Health" vs "health" — should still match
+    mockFind.mockResolvedValue([
+      { id: "mem-other", content: "Generic fact", score: 0.93, tags: ["misc"] },
+      { id: "mem-match", content: "Takes vitamin C", score: 0.88, tags: ["Health"] },
+    ]);
+    mockVerify.mockResolvedValueOnce("SUPERSEDES");
+
+    const result = await checkDeduplication(
+      "Switched from vitamin C to vitamin D",
+      "user-1",
+      ["health"] // lowercase
+    );
+
+    expect(result.action).toBe("supersede");
+    if (result.action === "supersede") {
+      expect(result.existingId).toBe("mem-match");
+    }
   });
 });

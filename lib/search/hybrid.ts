@@ -51,7 +51,10 @@ export async function hybridSearch(
   query: string,
   opts: HybridSearchOptions
 ): Promise<HybridSearchResult[]> {
-  const { userId, topK = 10, mode = "hybrid", candidateSize = 20 } = opts;
+  const { userId, topK = 10, mode = "hybrid" } = opts;
+  // Scale candidate pool with requested topK; floor at 50 so small topK values
+  // still draw from a broad enough pool for accurate RRF ranking.
+  const candidateSize = opts.candidateSize ?? Math.max(topK * 3, 50);
 
   // Run search arms in parallel where both are needed
   const [textResults, vectorResults] = await Promise.all([

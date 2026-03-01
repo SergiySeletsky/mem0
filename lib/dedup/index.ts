@@ -59,10 +59,16 @@ function hasNegation(tokens: Set<string>): boolean {
 /**
  * Run the deduplication pipeline for a new memory text.
  * Returns the outcome action for the caller to act on.
+ *
+ * When `tags` is provided, candidates sharing at least one tag are boosted
+ * to the front of the candidate list (tag-aware dedup). This prevents
+ * cross-domain interference where a memory from domain A supersedes
+ * an unrelated memory from domain B just because of high embedding similarity.
  */
 export async function checkDeduplication(
   newText: string,
-  userId: string
+  userId: string,
+  tags?: string[]
 ): Promise<DedupOutcome> {
   const config = await getDedupConfig();
   if (!config.enabled) return { action: "insert" };
@@ -85,23 +91,71 @@ export async function checkDeduplication(
   const candidates = await findNearDuplicates(newText, userId, effectiveThreshold);
   if (candidates.length === 0) return { action: "insert" };
 
-  // Stage 2: LLM verification for top candidate (highest cosine score)
-  const top = candidates[0];
-  const hash = pairHash(newText, top.content);
+  // Tag-aware dedup boosting: when the new memory has tags, prefer candidates
+  // that share at least one tag. This prevents cross-domain interference where
+  // e.g. a health memory supersedes an unrelated finance memory with similar embeddings.
+  // Candidates with shared tags are promoted to the front; within each group,
+  // original cosine ordering is preserved.
+  if (tags && tags.length > 0 && candidates.length > 1) {
+    const tagSet = new Set(tags.map(t => t.toLowerCase()));
+    const hasSharedTag = (c: typeof candidates[0]) =>
+      c.tags.some(t => tagSet.has(t.toLowerCase()));
+    const withTag = candidates.filter(hasSharedTag);
+    const withoutTag = candidates.filter(c => !hasSharedTag(c));
+    candidates.splice(0, candidates.length, ...withTag, ...withoutTag);
+  }
 
-  let result: VerificationResult;
-  const cached = getCached(hash);
-  if (cached) {
-    result = cached as VerificationResult;
-  } else {
+  // Stage 2: LLM verification for top candidate (highest cosine score)
+  // When #2 candidate is within 0.05 of #1, verify both — the true duplicate
+  // may rank slightly lower due to vector noise in large stores.
+  const top = candidates[0];
+  const runner = candidates[1];
+  const verifyRunner = runner && (top.score - runner.score) < 0.05;
+
+  /**
+   * Verify a single candidate against the new text.
+   * Returns the cache-aware LLM result, or null on error (fail-open).
+   */
+  async function verifySingle(
+    candidate: typeof top
+  ): Promise<{ result: VerificationResult; id: string } | null> {
+    const hash = pairHash(newText, candidate.content);
+    const cached = getCached(hash);
+    if (cached) return { result: cached as VerificationResult, id: candidate.id };
+
     try {
-      result = await verifyDuplicate(newText, top.content);
+      const result = await verifyDuplicate(newText, candidate.content);
       setCached(hash, result);
+      return { result, id: candidate.id };
     } catch (e) {
-      console.warn("[dedup] LLM verification failed, proceeding with insert:", e);
-      return { action: "insert" };
+      console.warn("[dedup] LLM verification failed for candidate", candidate.id, e);
+      return null;
     }
   }
+
+  // Verify top candidate first
+  const topVerification = await verifySingle(top);
+  if (!topVerification) return { action: "insert" };
+
+  // If top is DIFFERENT and runner-up is close enough, try the runner-up
+  if (topVerification.result === "DIFFERENT" && verifyRunner) {
+    const runnerVerification = await verifySingle(runner);
+    if (runnerVerification) {
+      if (runnerVerification.result === "DUPLICATE") {
+        if (!isNegationSafe(newText, runner.content)) {
+          console.debug("[dedup] negation gate on runner-up — treating as insert");
+          return { action: "insert" };
+        }
+        return { action: "skip", existingId: runner.id };
+      }
+      if (runnerVerification.result === "SUPERSEDES") {
+        return { action: "supersede", existingId: runner.id };
+      }
+    }
+    return { action: "insert" };
+  }
+
+  const result = topVerification.result;
 
   if (result === "DUPLICATE") {
     // Stage 2b — BM25 negation safety: prevent false-positive DUPLICATE merges when one

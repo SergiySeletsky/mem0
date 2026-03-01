@@ -10,29 +10,24 @@
 import { runWrite } from "@/lib/db/memgraph";
 import { getLLMClient } from "@/lib/ai/client";
 
-const CATEGORIES = [
-  "Personal",
-  "Work",
-  "Health",
-  "Finance",
-  "Travel",
-  "Education",
-  "Entertainment",
-  "Food",
-  "Technology",
-  "Sports",
-  "Social",
-  "Shopping",
-  "Family",
-  "Goals",
-  "Preferences",
+/** Seed examples shown to the LLM — NOT an allowlist. Any well-formed category is accepted. */
+const SEED_CATEGORIES = [
+  "Personal", "Work", "Health", "Finance", "Travel",
+  "Education", "Entertainment", "Food", "Technology", "Sports",
+  "Social", "Shopping", "Family", "Goals", "Preferences",
 ] as const;
 
 const SYSTEM_PROMPT = `You are a memory categorization assistant.
-Given a memory text, assign 1-3 relevant categories from this list:
-${CATEGORIES.join(", ")}.
+Given a memory text, assign 1-3 relevant categories. Use short, capitalized labels (1-3 words).
+Examples: ${SEED_CATEGORIES.join(", ")}.
+You may use categories not in this list if they better describe the memory.
 Respond with ONLY a valid JSON array of category name strings, e.g. ["Personal", "Work"].
 Do not include any other text.`;
+
+/** Max character length for a single category label */
+const MAX_CATEGORY_LENGTH = 50;
+/** Max number of categories per memory */
+const MAX_CATEGORIES = 3;
 
 /**
  * Determine categories for a memory text via LLM and persist them to Memgraph.
@@ -71,9 +66,20 @@ export async function categorizeMemory(
 
     if (!Array.isArray(categories)) return;
 
-    const valid = categories.filter((c) =>
-      (CATEGORIES as readonly string[]).includes(c)
-    );
+    // Open ontology: accept any well-formed string the LLM returns.
+    // Sanitize instead of allowlist-filtering.
+    const seen = new Set<string>();
+    const valid: string[] = [];
+    for (const c of categories) {
+      if (typeof c !== "string") continue;
+      const trimmed = c.trim();
+      if (!trimmed || trimmed.length > MAX_CATEGORY_LENGTH) continue;
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      valid.push(trimmed);
+      if (valid.length >= MAX_CATEGORIES) break;
+    }
 
     if (valid.length === 0) return;
 

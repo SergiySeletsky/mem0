@@ -306,8 +306,10 @@ export async function touchMemoryByDescription(
 
   if (matches.length === 0) return null;
 
-  // Only touch the best match if it has reasonable relevance
-  const RRF_THRESHOLD = 0.015;
+  // TOUCH is a write operation — use a high relevance threshold to prevent
+  // modifying the wrong memory. 0.025 RRF ≈ 0.76 normalized relevance_score.
+  // Better to return null ("no match found") than to touch the wrong memory.
+  const RRF_THRESHOLD = 0.025;
   const best = matches[0];
   if (best.rrfScore < RRF_THRESHOLD) return null;
 
@@ -356,7 +358,9 @@ export async function resolveMemoryByDescription(
 
   if (matches.length === 0) return null;
 
-  const RRF_THRESHOLD = 0.015;
+  // RESOLVE is a write operation (archives the memory) — use a high relevance
+  // threshold to prevent resolving the wrong memory. Same threshold as TOUCH.
+  const RRF_THRESHOLD = 0.025;
   const best = matches[0];
   if (best.rrfScore < RRF_THRESHOLD) return null;
 

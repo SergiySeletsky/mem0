@@ -11,6 +11,7 @@ export interface DuplicateCandidate {
   id: string;
   content: string;
   score: number; // cosine similarity 0–1
+  tags: string[]; // memory tags for tag-aware dedup boosting
 }
 
 /**
@@ -34,7 +35,8 @@ export async function findNearDuplicates(
        MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(node)
        WHERE node.invalidAt IS NULL AND node.state <> 'deleted'
          AND similarity >= $threshold
-       RETURN node.id AS id, node.content AS content, similarity
+       RETURN node.id AS id, node.content AS content, similarity,
+              coalesce(node.tags, []) AS tags
        ORDER BY similarity DESC`,
       { userId, limit: limit * 2, embedding, threshold }
     );
@@ -43,6 +45,7 @@ export async function findNearDuplicates(
       id: r.id as string,
       content: r.content as string,
       score: r.similarity as number,
+      tags: (r.tags as string[]) ?? [],
     }));
   } catch (e) {
     console.warn("[dedup] vector search failed:", e);

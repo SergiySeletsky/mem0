@@ -411,9 +411,9 @@ describe("MCP Tool Handlers — search_memory", () => {
     expect(parsed.results[0]).toHaveProperty("id", "m1");
     expect(parsed.results[0]).toHaveProperty("memory", "Alice uses TypeScript");
     expect(parsed.results[0]).toHaveProperty("relevance_score", 1.0); // 0.05 / 0.032786 > 1.0 -> capped at 1.0
-    expect(parsed.results[0]).toHaveProperty("raw_score", 0.05);
-    expect(parsed.results[0]).toHaveProperty("text_rank", 1);
-    expect(parsed.results[0]).toHaveProperty("vector_rank", 2);
+    expect(parsed.results[0]).not.toHaveProperty("raw_score");
+    expect(parsed.results[0]).not.toHaveProperty("text_rank");
+    expect(parsed.results[0]).not.toHaveProperty("vector_rank");
     expect(parsed.results[0]).toHaveProperty("categories", ["tech"]);
     expect(parsed.results[0]).toHaveProperty("tags", ["session-1"]);
   });
@@ -1991,5 +1991,129 @@ describe("MCP search_memory — include_entities default true", () => {
     expect(parsed.results).toHaveLength(1);
     expect(parsed.entities).toBeUndefined();
     expect(mockSearchEntities).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: Explicit replaces parameter tests
+// ---------------------------------------------------------------------------
+describe("MCP add_memories — explicit replaces parameter", () => {
+  let client: Client;
+
+  beforeAll(async () => {
+    ({ client } = await setupClientServer());
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockClassifyIntent.mockResolvedValue({ type: "STORE" as const });
+    mockSearchEntities.mockResolvedValue([]);
+  });
+
+  it("MCP_REPLACES_01: replaces calls supersedeMemory directly and bypasses checkDeduplication", async () => {
+    mockSupersedeMemory.mockResolvedValueOnce("new-superseded-id");
+    mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
+
+    const result = await client.callTool({
+      name: "add_memories",
+      arguments: {
+        content: "Barcelona trip: now going to Amsterdam instead",
+        replaces: "old-itinerary-id",
+      },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.stored).toBeUndefined();
+    expect(parsed.superseded).toBe(1);
+    expect(parsed.ids).toEqual(["new-superseded-id"]);
+
+    // supersedeMemory called with the explicit old ID
+    expect(mockSupersedeMemory).toHaveBeenCalledWith(
+      "old-itinerary-id",
+      "Barcelona trip: now going to Amsterdam instead",
+      "test-user",
+      "test-client",
+      undefined // no tags
+    );
+
+    // checkDeduplication should NOT be called — replaces bypasses dedup
+    expect(mockCheckDeduplication).not.toHaveBeenCalled();
+  });
+
+  it("MCP_REPLACES_02: replaces with tags forwards tags to supersedeMemory", async () => {
+    mockSupersedeMemory.mockResolvedValueOnce("new-tagged-id");
+    mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
+
+    await client.callTool({
+      name: "add_memories",
+      arguments: {
+        content: "Updated travel plan",
+        replaces: "old-plan-id",
+        tags: ["travel", "europe-2026"],
+      },
+    });
+
+    expect(mockSupersedeMemory).toHaveBeenCalledWith(
+      "old-plan-id",
+      "Updated travel plan",
+      "test-user",
+      "test-client",
+      ["travel", "europe-2026"]
+    );
+  });
+
+  it("MCP_REPLACES_03: replaces with categories writes HAS_CATEGORY edges", async () => {
+    mockSupersedeMemory.mockResolvedValueOnce("cat-superseded-id");
+    mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
+    mockRunWrite.mockResolvedValueOnce([]); // for category MERGE
+
+    await client.callTool({
+      name: "add_memories",
+      arguments: {
+        content: "New diet plan: high protein",
+        replaces: "old-diet-id",
+        categories: ["Health", "Nutrition"],
+      },
+    });
+
+    // Categories written via UNWIND MERGE
+    expect(mockRunWrite).toHaveBeenCalledWith(
+      expect.stringContaining("UNWIND $categories AS catName"),
+      expect.objectContaining({
+        userId: "test-user",
+        memId: "cat-superseded-id",
+        categories: ["Health", "Nutrition"],
+      })
+    );
+  });
+
+  it("MCP_REPLACES_04: replaces fires entity extraction for the new memory", async () => {
+    mockSupersedeMemory.mockResolvedValueOnce("entity-id");
+    mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
+
+    await client.callTool({
+      name: "add_memories",
+      arguments: {
+        content: "Alice now works at Google",
+        replaces: "old-alice-id",
+      },
+    });
+
+    expect(mockProcessEntityExtraction).toHaveBeenCalledWith("entity-id");
+  });
+
+  it("MCP_REPLACES_05: replaces does not trigger addMemory", async () => {
+    mockSupersedeMemory.mockResolvedValueOnce("replaced-id");
+    mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
+
+    await client.callTool({
+      name: "add_memories",
+      arguments: {
+        content: "Updated fact",
+        replaces: "target-id",
+      },
+    });
+
+    expect(mockAddMemory).not.toHaveBeenCalled();
   });
 });
