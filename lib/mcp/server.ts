@@ -34,6 +34,8 @@ import { classifyIntent } from "@/lib/mcp/classify";
 import { searchEntities, invalidateMemoriesByDescription, deleteEntityByNameOrId, touchMemoryByDescription, resolveMemoryByDescription } from "@/lib/mcp/entities";
 import type { EntityProfile } from "@/lib/mcp/entities";
 import { hybridSearch } from "@/lib/search/hybrid";
+import type { HybridSearchResult } from "@/lib/search/hybrid";
+import { traverseEntityGraph } from "@/lib/search/graph-traversal";
 import { buildDateFields } from "@/lib/mcp/dates";
 
 /**
@@ -497,12 +499,61 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         // fetchLimit so both search arms return enough candidates for post-filter recall.
         // Default candidateSize (20) is too small — RRF gets at most ~40 candidates,
         // and tag post-filter on ~40 results yields very few hits.
-        const results = await hybridSearch(query!, {
-          userId,
-          topK: fetchLimit,
-          mode: "hybrid",
-          ...(tag ? { candidateSize: fetchLimit } : {}),
-        });
+        //
+        // GRAPH-TRAVERSAL: Run graph traversal in parallel with hybrid search.
+        // Graph traversal finds memories through entity metadata and relationships
+        // (open ontology) — complements keyword/vector search on memory content.
+        const [hybridResults, graphResults] = await Promise.all([
+          hybridSearch(query!, {
+            userId,
+            topK: fetchLimit,
+            mode: "hybrid",
+            ...(tag ? { candidateSize: fetchLimit } : {}),
+          }),
+          traverseEntityGraph(query!, userId, { limit: fetchLimit }).catch(() => [] as { memoryId: string }[]),
+        ]);
+
+        // Merge: inject graph-discovered memories not found by hybrid search
+        const GRAPH_BASE_SCORE = 0.01;
+        let results: HybridSearchResult[] = [...hybridResults];
+        const hybridIds = new Set(hybridResults.map((r) => r.id));
+        const graphOnlyIds = graphResults
+          .map((r) => r.memoryId)
+          .filter((id) => !hybridIds.has(id));
+
+        if (graphOnlyIds.length > 0) {
+          // Hydrate graph-only memories using the same pattern as hybrid.ts
+          const graphRows = await runRead<{
+            id: string; content: string; createdAt: string; updatedAt: string;
+            appName: string | null; categories: string[]; tags: string[];
+          }>(
+            `UNWIND $ids AS memId
+             MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: memId})
+             WHERE m.invalidAt IS NULL
+             OPTIONAL MATCH (m)-[:CREATED_BY]->(a:App)
+             OPTIONAL MATCH (m)-[:HAS_CATEGORY]->(c:Category)
+             RETURN m.id AS id, m.content AS content, m.createdAt AS createdAt,
+                    m.updatedAt AS updatedAt,
+                    a.appName AS appName, collect(c.name) AS categories,
+                    coalesce(m.tags, []) AS tags`,
+            { ids: graphOnlyIds, userId },
+          );
+
+          for (const row of graphRows) {
+            results.push({
+              id: row.id as string,
+              rrfScore: GRAPH_BASE_SCORE,
+              textRank: null,
+              vectorRank: null,
+              content: row.content as string,
+              categories: (row.categories as string[]) ?? [],
+              tags: (row.tags as string[]) ?? [],
+              createdAt: (row.createdAt as string) ?? "",
+              updatedAt: (row.updatedAt as string) ?? "",
+              appName: (row.appName as string | null) ?? null,
+            });
+          }
+        }
 
         // Apply optional post-filters (category, date, tag)
         let filtered = results;

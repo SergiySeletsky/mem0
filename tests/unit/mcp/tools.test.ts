@@ -70,6 +70,11 @@ jest.mock("@/lib/search/hybrid", () => ({
   hybridSearch: jest.fn(),
 }));
 
+// Mock graph traversal — default to empty results so existing tests are unaffected
+jest.mock("@/lib/search/graph-traversal", () => ({
+  traverseEntityGraph: jest.fn(),
+}));
+
 jest.mock("@/lib/dedup", () => ({
   checkDeduplication: jest.fn(),
 }));
@@ -104,6 +109,7 @@ import { Client } from "@modelcontextprotocol/sdk/client";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { addMemory, supersedeMemory } from "@/lib/memory/write";
 import { hybridSearch } from "@/lib/search/hybrid";
+import { traverseEntityGraph } from "@/lib/search/graph-traversal";
 import { checkDeduplication } from "@/lib/dedup";
 import { processEntityExtraction } from "@/lib/entities/worker";
 import { classifyIntent } from "@/lib/mcp/classify";
@@ -112,6 +118,7 @@ import { searchEntities, invalidateMemoriesByDescription, deleteEntityByNameOrId
 const mockAddMemory = addMemory as jest.MockedFunction<typeof addMemory>;
 const mockSupersedeMemory = supersedeMemory as jest.MockedFunction<typeof supersedeMemory>;
 const mockHybridSearch = hybridSearch as jest.MockedFunction<typeof hybridSearch>;
+const mockTraverseEntityGraph = traverseEntityGraph as jest.MockedFunction<typeof traverseEntityGraph>;
 const mockCheckDeduplication = checkDeduplication as jest.MockedFunction<typeof checkDeduplication>;
 const mockProcessEntityExtraction = processEntityExtraction as jest.MockedFunction<typeof processEntityExtraction>;
 const mockClassifyIntent = classifyIntent as jest.MockedFunction<typeof classifyIntent>;
@@ -390,6 +397,8 @@ describe("MCP Tool Handlers — search_memory", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // Default: graph traversal returns empty — existing tests unaffected
+    mockTraverseEntityGraph.mockResolvedValue([]);
   });
 
   it("MCP_SM_01: returns hybrid search results with score fields", async () => {
@@ -586,6 +595,142 @@ describe("MCP Tool Handlers — search_memory", () => {
       "plain query",
       expect.objectContaining({ topK: 7 })
     );
+  });
+
+  // -----------------------------------------------------------------------
+  // Graph traversal integration
+  // -----------------------------------------------------------------------
+
+  it("MCP_GRAPH_01: graph-only memories are merged into search results", async () => {
+    // Hybrid search returns 1 result
+    mockHybridSearch.mockResolvedValueOnce([
+      {
+        id: "m-hybrid", content: "Hybrid result", rrfScore: 0.025,
+        textRank: 1, vectorRank: 1, createdAt: "2026-03-01", updatedAt: "2026-03-01",
+        categories: ["medical"], tags: [], appName: null,
+      },
+    ] as any);
+    // Graph traversal finds a different memory
+    mockTraverseEntityGraph.mockResolvedValueOnce([
+      { memoryId: "m-graph" },
+    ]);
+    // Hydration query for graph-only memory
+    mockRunRead.mockResolvedValueOnce([
+      {
+        id: "m-graph", content: "Graph-discovered memory about Dr. John",
+        createdAt: "2026-03-01", updatedAt: "2026-03-01",
+        appName: null, categories: ["medical"], tags: [],
+      },
+    ]);
+    mockRunWrite.mockResolvedValueOnce([]); // access log
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "dr john treatment" },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toHaveLength(2);
+    // Hybrid result should come first (higher score)
+    expect(parsed.results[0].id).toBe("m-hybrid");
+    // Graph result should appear second with lower score
+    expect(parsed.results[1].id).toBe("m-graph");
+    expect(parsed.results[1].relevance_score).toBeLessThan(parsed.results[0].relevance_score);
+  });
+
+  it("MCP_GRAPH_02: graph results already in hybrid are deduplicated", async () => {
+    mockHybridSearch.mockResolvedValueOnce([
+      {
+        id: "m1", content: "Already found", rrfScore: 0.03,
+        textRank: 1, vectorRank: 1, createdAt: "2026-03-01", updatedAt: "2026-03-01",
+        categories: [], tags: [], appName: null,
+      },
+    ] as any);
+    // Graph traversal finds the same memory — should be deduplicated
+    mockTraverseEntityGraph.mockResolvedValueOnce([
+      { memoryId: "m1" },
+    ]);
+    mockRunWrite.mockResolvedValueOnce([]); // access log
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "test query" },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toHaveLength(1);
+    expect(parsed.results[0].id).toBe("m1");
+    // No hydration call needed — memory already in hybrid results
+    expect(mockRunRead).not.toHaveBeenCalled();
+  });
+
+  it("MCP_GRAPH_03: graph traversal failure doesn't break search", async () => {
+    mockHybridSearch.mockResolvedValueOnce([
+      {
+        id: "m1", content: "Normal result", rrfScore: 0.025,
+        textRank: 1, vectorRank: 2, createdAt: "2026-03-01", updatedAt: "2026-03-01",
+        categories: [], tags: [], appName: null,
+      },
+    ] as any);
+    // Graph traversal throws
+    mockTraverseEntityGraph.mockRejectedValueOnce(new Error("Cypher timeout"));
+    mockRunWrite.mockResolvedValueOnce([]); // access log
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "query" },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toHaveLength(1);
+    expect(parsed.results[0].id).toBe("m1");
+  });
+
+  it("MCP_GRAPH_04: graph-only results subject to post-filters", async () => {
+    mockHybridSearch.mockResolvedValueOnce([]);
+    mockTraverseEntityGraph.mockResolvedValueOnce([
+      { memoryId: "m-graph" },
+    ]);
+    // Hydrated graph memory has a category that doesn't match the filter
+    mockRunRead.mockResolvedValueOnce([
+      {
+        id: "m-graph", content: "Graph result",
+        createdAt: "2026-03-01", updatedAt: "2026-03-01",
+        appName: null, categories: ["finance"], tags: [],
+      },
+    ]);
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "test", category: "medical" },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    // Graph result filtered out because category doesn't match
+    expect(parsed.results).toHaveLength(0);
+  });
+
+  it("MCP_GRAPH_05: empty graph results don't affect existing behavior", async () => {
+    mockHybridSearch.mockResolvedValueOnce([
+      {
+        id: "m1", content: "Normal", rrfScore: 0.02,
+        textRank: 1, vectorRank: 3, createdAt: "2026-03-01", updatedAt: "2026-03-01",
+        categories: ["tech"], tags: [], appName: null,
+      },
+    ] as any);
+    mockTraverseEntityGraph.mockResolvedValueOnce([]);
+    mockRunWrite.mockResolvedValueOnce([]); // access log
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "normal search" },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toHaveLength(1);
+    expect(parsed.results[0].id).toBe("m1");
+    // No hydration call — no graph-only results
+    expect(mockRunRead).not.toHaveBeenCalled();
   });
 });
 

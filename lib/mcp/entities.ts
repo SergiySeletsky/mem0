@@ -65,7 +65,7 @@ export async function searchEntities(
   };
   if (options?.entityType) params.entityType = options.entityType.toUpperCase();
 
-  // Arm 1: Substring match on name/description
+  // Arm 1: Substring match on name/description/metadata (open ontology)
   const substringRows = await runRead<{
     id: string;
     name: string;
@@ -76,7 +76,8 @@ export async function searchEntities(
   }>(
     `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity)
      WHERE (toLower(e.name) CONTAINS $query
-            OR (e.description IS NOT NULL AND toLower(e.description) CONTAINS $query))
+            OR (e.description IS NOT NULL AND toLower(e.description) CONTAINS $query)
+            OR (e.metadata IS NOT NULL AND toLower(e.metadata) CONTAINS $query))
            ${typeClause}
      OPTIONAL MATCH (m:Memory)-[:MENTIONS]->(e)
      WHERE m.invalidAt IS NULL
