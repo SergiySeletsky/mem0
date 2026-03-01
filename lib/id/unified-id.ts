@@ -14,10 +14,7 @@
 
 import { randomUUID } from "crypto";
 
-/**
- * Represents an Immutable Unified Identifier.
- * TypeScript port compatible with the C# UnifiedId implementation.
- */
+/** Represents an Immutable Unified Identifier. */
 export class UnifiedId {
   /** Empty UnifiedId. */
   public static readonly Empty = new UnifiedId(0n);
@@ -299,10 +296,7 @@ export class UnifiedId {
     return UnifiedId.decode(hex);
   }
 
-  /**
-   * Generate x64 FNV-1a hash from bytes.
-   * Matches the C# implementation exactly (XOR-then-multiply, masked to 64 bits).
-   */
+  /** Generate x64 FNV-1a hash from bytes (XOR-then-multiply, masked to 64 bits). */
   private static newHash(bytes: Uint8Array): bigint {
     let fnv = UnifiedId.OFFSET;
 
@@ -344,12 +338,8 @@ export class UnifiedId {
   }
 
   /**
-   * Convert a UUID string to a byte array matching .NET Guid.ToByteArray() layout.
-   * .NET Guid has a mixed-endian layout:
-   *   bytes[0..3]  = first group  (little-endian)
-   *   bytes[4..5]  = second group (little-endian)
-   *   bytes[6..7]  = third group  (little-endian)
-   *   bytes[8..15] = last two groups (big-endian / as-is)
+   * Convert a UUID string to a byte array with mixed-endian layout.
+   * Groups 1-3 are little-endian, groups 4-5 are big-endian.
    */
   private static guidToBytes(guid: string): Uint8Array {
     const hex = guid.replace(/-/g, "");
@@ -362,7 +352,6 @@ export class UnifiedId {
       raw[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
     }
 
-    // Reorder to match .NET Guid.ToByteArray() mixed-endian layout
     const bytes = new Uint8Array(16);
     // Group 1 (4 bytes) - little-endian
     bytes[0] = raw[3];
