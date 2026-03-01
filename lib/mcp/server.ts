@@ -60,37 +60,35 @@ const addMemoriesSchema = {
   content: z
     .union([z.string(), z.array(z.string())])
     .describe(
-      "One or more strings to process. The system auto-classifies each item's intent:\n" +
-      "- Facts, preferences, decisions -> stored (with automatic dedup & supersession)\n" +
-      "- 'Forget X' / 'Remove memories about Y' -> matching memories are invalidated\n" +
-      "- 'Stop tracking entity Z' -> entity and its connections are removed\n" +
-      "Pass a single string or an array for batch processing."
+      "What to remember. Single string or array of strings.\n" +
+      "The system understands natural language intent:\n" +
+      "• Statements, facts, decisions → remembered (duplicates auto-detected and merged)\n" +
+      "• 'Forget X' / 'Remove memories about Y' → matching memories removed\n" +
+      "• 'Stop tracking [entity]' → entity and its connections cleaned up"
     ),
   categories: z
     .array(z.string())
     .optional()
     .describe(
-      "Optional explicit category tags for STORE items (e.g. ['Work', 'Architecture']). " +
-      "When provided, these categories are written immediately -- the LLM auto-categorizer still " +
-      "runs and may add additional categories via MERGE (no duplicates). When omitted, categories are assigned automatically. " +
-      "Well-known categories: Personal, Work, Health, Finance, Travel, Education, Entertainment, " +
-      "Food, Technology, Sports, Social, Shopping, Family, Goals, Preferences -- but any string is accepted."
+      "Semantic labels for organization (e.g. ['Architecture', 'Security']). " +
+      "Applied immediately; the system may also suggest additional categories. " +
+      "When omitted, categories are assigned automatically. Any string accepted."
     ),
   tags: z
     .array(z.string())
     .optional()
     .describe(
-      "Optional exact-match tags for scoped retrieval (e.g. ['audit-session-17', 'prod-incident']). " +
-      "Tags are stored on the Memory node and enable precise filtering via search_memory(tag: '...'). " +
-      "Unlike categories (semantic labels auto-assigned by LLM), tags are verbatim identifiers you control."
+      "Exact identifiers for precise filtering (e.g. ['project-x', 'session-5', 'prod-incident']). " +
+      "Unlike categories, tags are never auto-assigned — fully caller-controlled. " +
+      "Use for project scoping, session tracking, or domain isolation. " +
+      "Retrieve later via search_memory(tag: '...')."
     ),
   suppress_auto_categories: z
     .boolean()
     .optional()
     .describe(
-      "When true, suppresses LLM auto-categorization for STORE items. " +
-      "Use when you provide explicit categories and don't want the LLM to add noise " +
-      "(e.g. 'Technology', 'Work') on top of your curated labels. Default: false."
+      "Skip automatic category suggestions. Use when you provide explicit categories " +
+      "and want predictable grouping without extras. Default: false."
     ),
 };
 
@@ -102,11 +100,15 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
     "add_memories",
     {
       description:
-        "Write to long-term memory. The system auto-classifies each item:\n" +
-        "- Facts/preferences/decisions -> stored (with dedup & supersession)\n" +
-        "- 'Forget X' / 'Remove memories about Y' -> matching memories are invalidated\n" +
-        "- 'Stop tracking entity Z' -> entity removed from knowledge graph\n" +
-        "Pass a single string or array of strings for batch processing.",
+        "Store information in long-term memory. Use this PROACTIVELY — save any facts, " +
+        "decisions, preferences, patterns, or insights worth remembering across conversations.\n\n" +
+        "What to store: user preferences, architecture decisions, project conventions, " +
+        "problem solutions, relationships between concepts, workflow patterns, debug findings.\n\n" +
+        "The system understands natural language intent:\n" +
+        "• Statements → remembered (duplicates automatically detected and merged)\n" +
+        "• 'Forget X' / 'Remove memories about Y' → matching memories removed\n" +
+        "• 'Stop tracking [entity]' → entity and its connections cleaned up\n\n" +
+        "Accepts a single string or an array for batch writes.",
       inputSchema: addMemoriesSchema,
     },
     async ({ content, categories: explicitCategories, tags: explicitTags, suppress_auto_categories: suppressAutoCategories }) => {
@@ -326,12 +328,15 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
     "search_memory",
     {
       description:
-        "Dual-mode memory + knowledge tool.\n" +
-        "SEARCH (query provided): hybrid BM25 + vector search, auto-enriched with matching " +
-        "entity profiles and their relationships -- use for specific recall, entity lookup, " +
-        "incident investigation, or any targeted question.\n" +
-        "BROWSE (query omitted): returns all memories newest-first with total count and " +
-        "offset/limit pagination -- use on cold-start to see what is already known.",
+        "Recall from long-term memory. Use BEFORE making decisions, writing code, or answering " +
+        "questions — always check what's already known first.\n\n" +
+        "Two modes:\n" +
+        "• With query: finds the most relevant memories and surfaces related entities with " +
+        "their connections. Use natural language — be specific and include context.\n" +
+        "• Without query: lists all memories newest-first (use to see what's stored, " +
+        "or on first interaction).\n\n" +
+        "Tip: search 2–3 times with different phrasings to maximize recall. " +
+        "Use tags for project/session scoping.",
       inputSchema: searchMemorySchema,
     },
     async ({ query, limit, offset, category, created_after, include_entities, tag }) => {

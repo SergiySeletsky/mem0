@@ -69,6 +69,19 @@ pnpm test
 pnpm test:pw
 ```
 
+### Restart Dev Server After Significant Changes
+
+After modifying API routes, MCP server, write pipeline, search pipeline, or any `lib/` module that runs server-side, **restart the dev server** so changes take effect on the live API/MCP endpoints. Next.js HMR does NOT reliably hot-reload SSE/MCP transport routes or `instrumentation.ts`.
+
+```powershell
+# Kill existing Next.js processes and restart
+Get-Process -Name "node" -EA 0 | Where-Object {
+  (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -match 'next'
+} | Stop-Process -Force; Start-Sleep 2; pnpm dev
+```
+
+Always verify the server is healthy after restart: `GET /api/health` should return `{"status":"ok"}`.
+
 ## Spec Reference
 
 Features are tracked inline in source files and code comments. Key specs by domain:

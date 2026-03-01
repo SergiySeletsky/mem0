@@ -2,27 +2,30 @@
 applyTo: '**'
 ---
 
-# MemForge MCP Integration
+# MemForge MCP -- Long-Term Memory for AI Agents
 
-Memory = accumulated understanding of codebase + user preferences. Two tools only: `add_memories` (write) and `search_memory` (read).
+Two tools give you persistent memory across conversations: **`add_memories`** (remember) and **`search_memory`** (recall).
 
-## Tools
+---
 
-### add_memories â€” Write to long-term memory
+## add_memories -- Remember
 
-The system auto-classifies each item's intent:
-- Facts/preferences/decisions â†’ **stored** (with dedup & supersession)
-- "Forget X" / "Remove memories about Y" â†’ matching memories **invalidated**
-- "Stop tracking entity Z" â†’ entity **removed** from knowledge graph
+Store any facts, decisions, preferences, patterns, or insights worth keeping across conversations.
+
+The system understands natural language intent:
+- Statements, facts, decisions --> **remembered** (duplicates auto-detected and merged)
+- "Forget X" / "Remove memories about Y" --> matching memories **removed**
+- "Stop tracking entity Z" --> entity and its connections **cleaned up**
 
 **Parameters:**
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
-| `content` | `string \| string[]` | âœ… | One or more items. Array = batch. |
-| `categories` | `string[]` | | Explicit category labels (e.g. `["Work", "Architecture"]`). LLM auto-categorizer also runs. |
-| `tags` | `string[]` | | Exact-match identifiers for scoped retrieval (e.g. `["audit-session-7", "prod"]`). |
+| `content` | `string \| string[]` | Yes | What to remember. Single string or array for batch writes. |
+| `categories` | `string[]` | | Semantic labels for organization (e.g. `["Architecture", "Security"]`). Auto-assigned when omitted. |
+| `tags` | `string[]` | | Exact identifiers you control for precise filtering (e.g. `["project-x", "session-5"]`). Never auto-assigned. |
+| `suppress_auto_categories` | `boolean` | | Skip automatic category suggestions when you provide explicit categories. Default: `false`. |
 
-**Response (minimal â€” no input echo):**
+**Response (minimal -- no input echo):**
 ```jsonc
 // All stored:            {"stored": 4, "ids": ["a","b","c","d"]}
 // Mixed outcomes:        {"stored": 2, "ids": ["a","c"], "skipped": 1, "superseded": 1}
@@ -33,81 +36,126 @@ The system auto-classifies each item's intent:
 ```
 Only non-zero counts appear. `ids` covers stored + superseded items. Errors carry the input index for correlation.
 
-### search_memory â€” Read from long-term memory
+---
 
-**Two modes:**
-- **SEARCH** (query provided): hybrid BM25 + vector search, auto-enriched with entity profiles
-- **BROWSE** (query omitted): all memories newest-first, paginated
+## search_memory -- Recall
+
+Find what's already known. **Use BEFORE making decisions, writing code, or answering questions.**
+
+Two modes:
+- **With query:** finds the most relevant memories and surfaces related entities with their connections. Use natural language -- be specific.
+- **Without query:** lists all memories newest-first (use on first interaction, or to see what's stored).
 
 **Parameters:**
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
-| `query` | `string` | | Natural language query. Omit for browse mode. |
-| `category` | `string` | | Filter to this category only. |
-| `tag` | `string` | | Exact tag filter (case-insensitive). |
+| `query` | `string` | | What to recall. Natural language -- be specific. Omit for browse mode. |
+| `category` | `string` | | Return only memories in this category. |
+| `tag` | `string` | | Return only memories with this exact tag (case-insensitive). |
 | `limit` | `number` | | Max results (default: 10 search / 50 browse; max: 200). |
-| `offset` | `number` | | Skip N memories (browse pagination). |
-| `include_entities` | `boolean` | | Entity profile enrichment (default: true). Set false for speed. |
-| `created_after` | `string` | | ISO date filter (e.g. `"2026-02-01"`). |
+| `offset` | `number` | | Skip N memories for pagination (browse mode). Default: 0. |
+| `include_entities` | `boolean` | | Include related entity profiles and connections (default: true). Set false for speed. |
+| `created_after` | `string` | | Only memories after this date (ISO, e.g. `"2026-02-01"`). |
 
-**Search response:** `{ confident, message, results: [{ id, memory, relevance_score, raw_score, text_rank, vector_rank, created_at, categories }] }`
-**Browse response:** `{ total, offset, limit, results: [{ id, memory, created_at, updated_at, categories, tags }] }`
+**Search response:**
+```jsonc
+{
+  "total_matching": 25,       // total matches before limit cap
+  "confident": true,          // whether results are likely relevant
+  "message": "Found relevant results.",
+  "results": [{
+    "id": "...", "memory": "...",
+    "relevance_score": 0.95,  // 0-1 normalized
+    "created_at": "...", "updated_at": "...",
+    "categories": ["Architecture"], "tags": ["project-x"]
+  }],
+  "entities": [{              // only when include_entities=true
+    "name": "AuthService", "type": "COMPONENT",
+    "description": "...", "relationships": [...]
+  }]
+}
+```
 
-## Memory-First Workflow
+**Browse response:**
+```jsonc
+{
+  "total": 142, "offset": 0, "limit": 50,
+  "results": [{
+    "id": "...", "memory": "...",
+    "created_at": "...", "updated_at": "...",
+    "categories": ["Security"], "tags": ["session-5"]
+  }]
+}
+```
 
-For **code implementation/modification tasks** â€” 3 phases. Skip for simple recall or storage requests.
+---
 
-### Phase 1: Search BEFORE coding
-Search 2+ times before writing any code. Strategy by task type:
-- **Feature** â†’ existing patterns + similar implementations
-- **Bug** â†’ debug memories + error patterns
-- **Refactor** â†’ organization patterns + architecture decisions
+## When to Use Each Tool
 
-### Phase 2: Search DURING coding
-Search at checkpoints: creating files, writing functions, making decisions, hitting errors.
-Never assume "standard practice" â€” search for prior patterns first.
+| Situation | Tool | Example |
+|-----------|------|---------|
+| Starting a new task | `search_memory` | Check for existing patterns, prior decisions |
+| Making a design decision | `search_memory` then `add_memories` | Search first, then store the decision |
+| Finished implementing something | `add_memories` | Store the approach, patterns, gotchas |
+| Hit a bug or edge case | `search_memory` then `add_memories` | Check for known issues, then store the solution |
+| Want to see everything stored | `search_memory` (no query) | Browse mode -- full inventory |
+| Need project-specific context | `search_memory(tag: "repo-name")` | Filter to one project |
 
-### Phase 3: Store AFTER coding
-Store 1+ memory for non-trivial work: architecture decisions, implementation strategies, debug solutions, component relationships. Use `categories` for semantic grouping and `tags` for exact scoped retrieval.
+**Key principle:** Search 2-3 times with different phrasings before acting. Memory recall improves with varied queries.
+
+---
 
 ## Query Guidance
 
-- Use natural language questions, not keywords: "How does the dedup pipeline work?" not "dedup pipeline"
-- Expand acronyms and add context: "auth" â†’ "authentication system architecture and implementation"
-- For broad recovery, use 3-4 targeted queries across different angles
-- Browse mode (no query) for cold-start inventory check
+- **Be specific:** "What authentication pattern does this project use?" not "auth"
+- **Add context:** "How are entities deduplicated during extraction?" not "entity dedup"
+- **Vary phrasings:** search from different angles to maximize recall
+- **Browse first:** on cold-start, browse (no query) to see what's available
+
+---
 
 ## What to Store
 
 **Store:** Architecture decisions, problem-solving strategies, component relationships, implementation patterns, debug solutions, non-obvious behaviors, multi-file workflows.
 **Skip:** Trivial one-line fixes, information already in code comments.
-**Tags:** Use for session tracking (`session-8`), domain scoping (`security`, `frontend`), or workflow markers (`audit`, `prod-incident`).
-**Categories:** Use well-known labels when applicable: Personal, Work, Health, Technology, Architecture, etc. Any string accepted.
+
+---
+
+## Tags vs Categories
+
+| | Tags | Categories |
+|---|------|------------|
+| **Control** | You set them, never auto-assigned | Auto-assigned by system (you can also set explicitly) |
+| **Purpose** | Precise filtering and scoping | Semantic organization |
+| **Examples** | `"project-x"`, `"session-5"`, `"prod-incident"` | `"Architecture"`, `"Security"`, `"Frontend"` |
+| **Retrieval** | `search_memory(tag: "project-x")` | `search_memory(category: "Security")` |
+
+---
 
 ## Project / Repo Scoping
 
-use **tags** for project-level isolation adding project name or git repo name etc.
-
-**Convention:** Tag with the repo slug (e.g. `"mem0ai/mem0"`) so memories are retrievable per-project.
+Use **tags** for project-level isolation -- tag with the repo slug.
 
 ```jsonc
 // Store a project-scoped memory:
-add_memories(content: "Auth uses JWT with 15min expiry", tags: ["mem0ai/mem0", "optimization"]])
+add_memories(content: "Auth uses JWT with 15min expiry", tags: ["mem0ai/mem0"])
 
-// Retrieve only this project's memories:
+// Recall only this project's memories:
 search_memory(query: "auth architecture", tag: "mem0ai/mem0")
 
-// Browse all memories for this project:
+// Browse all for this project:
 search_memory(tag: "mem0ai/mem0")
 
-// Combine project + session tags + other tags:
+// Stack multiple tags:
 add_memories(content: "...", tags: ["mem0ai/mem0", "session-8", "security"])
 ```
 
-**Tag stacking:** A memory can carry multiple tags â€” project, session, domain, other. `search_memory(tag: ...)` filters on a single tag at a time, so use the most specific one for retrieval.
+`search_memory(tag: ...)` filters on one tag at a time -- use the most specific one.
+
+---
 
 ## Security
 
-**NEVER store:** API keys, tokens, passwords, private keys, credentials, connection strings with secrets.
-**Instead store:** Redacted patterns (`"uses bearer token auth"`), setup instructions (`"Set LLM_AZURE_OPENAI_API_KEY env var"`).
-**Deletion:** Use `add_memories(content: "Forget X")` â€” the intent classifier routes it automatically. No separate delete tool.
+**NEVER store:** API keys, tokens, passwords, private keys, credentials, connection strings.
+**Instead store:** Redacted patterns (`"uses bearer token auth"`), setup instructions (`"Set API_KEY env var"`).
+**Deletion:** `add_memories(content: "Forget X")` -- the system handles it automatically.
