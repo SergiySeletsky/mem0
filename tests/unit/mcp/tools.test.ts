@@ -620,8 +620,10 @@ describe("MCP Tool Handlers — search_memory (browse mode)", () => {
     expect(parsed.results).toHaveLength(2);
     expect(parsed.results[0]).toHaveProperty("id", "m1");
     expect(parsed.results[0]).toHaveProperty("memory", "Memory one");
+    // Semantic date: created_at present, no updated_at when createdAt === updatedAt
     expect(parsed.results[0]).toHaveProperty("created_at");
-    expect(parsed.results[0]).toHaveProperty("updated_at");
+    expect(parsed.results[0].created_at).toMatch(/^2026-01-01/);
+    expect(parsed.results[0]).not.toHaveProperty("updated_at");
     // browse mode must NOT call hybridSearch
     expect(mockHybridSearch).not.toHaveBeenCalled();
   });
@@ -1150,9 +1152,9 @@ describe("MCP add_memories — global drain budget (MCP-02)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// NEW: Improvement #1 — updated_at in search results (MCP-UPDATED-AT-01)
+// NEW: Improvement #1 — semantic date fields in search results (MCP-UPDATED-AT-01)
 // ---------------------------------------------------------------------------
-describe("MCP search_memory — updated_at in search results", () => {
+describe("MCP search_memory — semantic date fields", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -1167,7 +1169,7 @@ describe("MCP search_memory — updated_at in search results", () => {
     mockSearchEntities.mockResolvedValue([]);
   });
 
-  it("MCP_UPDATED_AT_01: search mode results include updated_at field", async () => {
+  it("MCP_UPDATED_AT_01: search mode results include semantic date fields", async () => {
     mockHybridSearch.mockResolvedValueOnce([
       {
         id: "m1", content: "Alice works at Acme", rrfScore: 0.03, textRank: 1, vectorRank: 1,
@@ -1183,16 +1185,18 @@ describe("MCP search_memory — updated_at in search results", () => {
 
     const parsed = parseToolResult(result as any) as any;
     expect(parsed.results).toHaveLength(1);
-    expect(parsed.results[0]).toHaveProperty("created_at", "2026-01-01");
-    expect(parsed.results[0]).toHaveProperty("updated_at", "2026-01-15");
+    // Semantic date format: "YYYY-MM-DD (bucket)"
+    expect(parsed.results[0].created_at).toMatch(/^2026-01-01 \(/);
+    // updated_at present because updatedAt (Jan 15) differs from createdAt (Jan 1)
+    expect(parsed.results[0].updated_at).toMatch(/^2026-01-15 \(/);
   });
 
-  it("MCP_UPDATED_AT_02: updated_at defaults to empty string when missing from hybrid result", async () => {
+  it("MCP_UPDATED_AT_02: last_modified absent when updatedAt missing from hybrid result", async () => {
     mockHybridSearch.mockResolvedValueOnce([
       {
         id: "m1", content: "No updatedAt field", rrfScore: 0.03, textRank: 1, vectorRank: 1,
         categories: [], tags: [], createdAt: "2026-01-01", appName: "test-client",
-        // updatedAt intentionally omitted — cast to simulate old data without the field
+        // updatedAt intentionally omitted — falls back to createdAt, which equals createdAt → no last_modified
       } as any,
     ]);
     mockRunWrite.mockResolvedValueOnce([]);
@@ -1203,8 +1207,9 @@ describe("MCP search_memory — updated_at in search results", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    // When updatedAt is missing from hybrid result, should fall back to createdAt
-    expect(parsed.results[0]).toHaveProperty("updated_at", "2026-01-01");
+    // When updatedAt falls back to createdAt, they match → no updated_at emitted
+    expect(parsed.results[0].created_at).toMatch(/^2026-01-01 \(/);
+    expect(parsed.results[0]).not.toHaveProperty("updated_at");
   });
 });
 

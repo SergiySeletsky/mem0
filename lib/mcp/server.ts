@@ -34,6 +34,7 @@ import { classifyIntent } from "@/lib/mcp/classify";
 import { searchEntities, invalidateMemoriesByDescription, deleteEntityByNameOrId, touchMemoryByDescription, resolveMemoryByDescription } from "@/lib/mcp/entities";
 import type { EntityProfile } from "@/lib/mcp/entities";
 import { hybridSearch } from "@/lib/search/hybrid";
+import { buildDateFields } from "@/lib/mcp/dates";
 
 /**
  * Create a new McpServer instance with the 2 memory tools registered.
@@ -412,6 +413,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
 
           console.log(`[MCP] search_memory browse done in ${Date.now() - t0}ms count=${rows.length} total=${total}`);
 
+          const now = new Date();
           return {
             content: [{
               type: "text",
@@ -422,8 +424,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
                 results: rows.map((m) => ({
                   id: m.id,
                   memory: m.content,
-                  created_at: m.createdAt,
-                  updated_at: m.updatedAt,
+                  ...buildDateFields(m.createdAt, m.updatedAt, now),
                   categories: m.categories ?? [],
                   tags: m.tags ?? [],
                 })),
@@ -532,21 +533,23 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
                     : "Found some results, but confidence is LOW. These might not be relevant to your query.",
                 };
               })() : { confident: true, message: "No results found." }),
-              results: filtered.map((r) => {
-                const normalizedScore = Math.min(1.0, Math.round((r.rrfScore / 0.032786) * 100) / 100);
-                return {
-                  id: r.id,
-                  memory: r.content,
-                  relevance_score: normalizedScore,
-                  raw_score: r.rrfScore,
-                  text_rank: r.textRank,
-                  vector_rank: r.vectorRank,
-                  created_at: r.createdAt,
-                  updated_at: r.updatedAt ?? r.createdAt,
-                  categories: r.categories,
-                  tags: r.tags ?? [],
-                };
-              }),
+              results: (() => {
+                const now = new Date();
+                return filtered.map((r) => {
+                  const normalizedScore = Math.min(1.0, Math.round((r.rrfScore / 0.032786) * 100) / 100);
+                  return {
+                    id: r.id,
+                    memory: r.content,
+                    relevance_score: normalizedScore,
+                    raw_score: r.rrfScore,
+                    text_rank: r.textRank,
+                    vector_rank: r.vectorRank,
+                    ...buildDateFields(r.createdAt, r.updatedAt ?? r.createdAt, now),
+                    categories: r.categories,
+                    tags: r.tags ?? [],
+                  };
+                });
+              })(),
               ...(entities.length > 0 ? {
                 entities: entities.map((e) => ({
                   id: e.id,
