@@ -1894,3 +1894,91 @@ Reduce LLM round-trips in the hot paths: one saved per search query (Opt 1) and 
 ### Verification
 - `tsc --noEmit`: **0 errors**
 - `jest --runInBand --no-coverage`: **54 suites / 632 tests — 0 failures** (up from 51/538)
+
+---
+
+## Session 25 — Graph Schema Enhancements (GraphRAG/Graphiti parity)
+
+### Objective
+Implement 3 graph schema improvements to close gaps vs Microsoft GraphRAG and Graphiti:
+1. Session/Episode nodes (Spec 10)
+2. Richer community reports (`rank` + `findings[]`)
+3. Relationship strength via `confirmedCount` on `[:RELATED_TO]` edges
+
+### Feature 1 — Session/Episode Nodes
+
+**New schema in `lib/db/memgraph.ts`:**
+```cypher
+CREATE CONSTRAINT ON (s:Session) ASSERT s.id IS UNIQUE
+CREATE INDEX ON :Session(userId)
+CREATE INDEX ON :Session(createdAt)
+```
+
+**Graph pattern:** `(User)-[:HAS_SESSION]->(Session)-[:CONTAINS]->(Memory)`
+
+**`AddMemoryOptions.sessionId?: string`** — When provided, a session block is appended to the Memory CREATE Cypher:
+```cypher
+MERGE (u)-[:HAS_SESSION]->(s:Session {id: $sessionId, userId: $userId})
+ON CREATE SET s.createdAt = $now, s.updatedAt = $now, s.metadata = '{}'
+ON MATCH SET s.updatedAt = $now
+CREATE (s)-[:CONTAINS]->(m)
+```
+
+**`supersedeMemory()`** accepts optional 6th arg `sessionId` — links replacement memory to same session.
+
+**`createSession(userId, opts?)`** exported — idempotent MERGE, auto-generates session ID if not provided.
+
+**MCP `add_memories` schema** — added `session_id` parameter:
+> "Group this memory with a conversation session or episode. Use any stable string as the ID (e.g. a conversation ID, date string, or workflow run ID). Supports open ontology."
+
+**Open ontology preserved:** `Session.metadata` stored as JSON string — callers can append custom fields.
+
+### Feature 2 — Richer Community Reports
+
+**`ClusterSummary` interface** (`lib/clusters/summarize.ts`):
+```typescript
+export interface ClusterSummary {
+  name: string;
+  summary: string;
+  rank: number;      // 1–10 centrality; LLM-provided, default 5
+  findings: string[];// 2–5 insight bullets; open array, callers can append
+}
+```
+
+**LLM prompt updated** to request `rank` (1–10) and `findings` (2–5 bullets). Parsing: `rank` clamped 1–10, `findings` filtered to `string[]`, max 5.
+
+**`CommunityNode` interface** extended with `rank: number` and `findings: string[]`. Both L0 and L1 community CREATE Cypher now stores `rank`, `findings` as native Memgraph properties.
+
+**Open ontology preserved:** `findings: string[]` is an open array — callers can `push()` domain-specific insights before persisting.
+
+### Feature 3 — Relationship Strength via confirmedCount
+
+**`[:RELATED_TO]` edge property `confirmedCount: number`** tracks how many times a relationship has been independently re-asserted.
+
+- New edge: `confirmedCount: 1`
+- Fast-path (identical normalized desc): `SET r.confirmedCount = coalesce(r.confirmedCount, 1) + 1` (was a pure return with no write)
+- LLM says SAME: same increment (was a pure return with no write)
+- UPDATE/CONTRADICTION: `newConfirmedCount = existingCount + 1` carried forward into new edge
+- Read query: `coalesce(r.confirmedCount, 1) AS confirmedCount` (backward-compatible with existing edges)
+
+**Design:** No upper cap — open ontology allows arbitrary re-assertion strength. Weight 0–1 still tracks LLM-provided relationship strength independently.
+
+### Files Modified (7 source + 4 test)
+
+| File | Change |
+|------|--------|
+| `lib/db/memgraph.ts` | Session constraint + 2 indexes |
+| `lib/memory/write.ts` | `sessionId` in `AddMemoryOptions`, `addMemory()`, `supersedeMemory()`; `createSession()` export |
+| `lib/clusters/summarize.ts` | `ClusterSummary` interface, `rank`/`findings` parsing |
+| `lib/clusters/build.ts` | `CommunityNode.rank/findings`; L0+L1 CREATE Cypher updated |
+| `lib/entities/relate.ts` | `confirmedCount` read, fast-path/SAME increment, UPDATE carry-forward, new edge init |
+| `lib/mcp/server.ts` | `session_id` in `addMemoriesSchema` + destructuring + wired to `addMemory`/`supersedeMemory` |
+| `tests/unit/clusters/build.test.ts` | Mock `summarizeCluster` returns updated to include `rank: 5, findings: []` |
+| `tests/unit/clusters/summarize.test.ts` | Mock changed from `openai` → `@/lib/ai/client`; SUMM_01/02 gain `rank`/`findings` assertions; added SUMM_03/04 |
+| `tests/unit/entities/relate.test.ts` | RELATE_04 (fast-path now writes 1×); RELATE_07 (SAME now writes 1×); added RELATE_12–15 (confirmedCount) |
+| `tests/unit/memory/write.test.ts` | `createSession` import; added SESSION_01–03 |
+| `tests/unit/mcp/tools.test.ts` | 5 `supersedeMemory` call assertions now include 6th `undefined` for `sessionId` |
+
+### Verification
+- `tsc --noEmit`: **0 errors**
+- `jest --runInBand --no-coverage`: **54 suites / 648 tests — 0 failures** (up from 632)

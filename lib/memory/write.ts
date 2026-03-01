@@ -33,6 +33,12 @@ export interface AddMemoryOptions {
   tags?: string[];
   /** When true, skip the LLM auto-categorization fire-and-forget call. */
   suppressAutoCategories?: boolean;
+  /**
+   * Session/episode ID to group this memory with a conversation session.
+   * If the Session node does not exist it is created (MERGE).
+   * Session nodes support open ontology via the `metadata` JSON property.
+   */
+  sessionId?: string;
 }
 
 export interface MemoryNode {
@@ -65,7 +71,7 @@ export async function addMemory(
   text: string,
   opts: AddMemoryOptions
 ): Promise<string> {
-  const { userId, appName, metadata, tags } = opts;
+  const { userId, appName, metadata, tags, sessionId } = opts;
   const id = generateId();
   const now = new Date().toISOString();
 
@@ -90,6 +96,16 @@ export async function addMemory(
     { userId, now }
   );
 
+  // Session block (Spec 10) — links Memory to a Session/Episode node when sessionId provided.
+  // Session supports open ontology: any custom properties can be stored via sessionMetadata.
+  const sessionBlock = sessionId
+    ? `WITH u, m
+     MERGE (u)-[:HAS_SESSION]->(s:Session {id: $sessionId, userId: $userId})
+     ON CREATE SET s.createdAt = $now, s.updatedAt = $now, s.metadata = '{}'
+     ON MATCH SET s.updatedAt = $now
+     CREATE (s)-[:CONTAINS]->(m)`
+    : "";
+
   // Create Memory node + HAS_MEMORY edge in a single session
   await runWrite(
     `MATCH (u:User {userId: $userId}) WITH u LIMIT 1
@@ -109,6 +125,7 @@ export async function addMemory(
      MERGE (u)-[:HAS_APP]->(a:App {appName: $appName})
      ON CREATE SET a.id = $appId, a.createdAt = $now, a.isActive = true
      MERGE (m)-[:CREATED_BY]->(a)` : ""}
+     ${sessionBlock}
      RETURN m.id AS id`,
     {
       userId,
@@ -118,6 +135,7 @@ export async function addMemory(
       metadata: metadata ? JSON.stringify(metadata) : "{}",
       tags: tags ?? [],
       now,
+      ...(sessionId ? { sessionId } : {}),
       ...(appName ? { appName, appId: generateId() } : {}),
     }
   );
@@ -183,7 +201,9 @@ export async function supersedeMemory(
   userId: string,
   appName?: string,
   /** Tags to propagate to the new memory node. When omitted, inherits tags from the old node. */
-  tags?: string[]
+  tags?: string[],
+  /** Session/episode ID — links the replacement memory to the same session as the original (or a new one). */
+  sessionId?: string
 ): Promise<string> {
   const now = new Date().toISOString();
   const newId = generateId();
@@ -209,6 +229,17 @@ export async function supersedeMemory(
   // WRITE-SUPERSEDE-NOT-ATOMIC fix: All steps in a single Cypher query.
   // Invalidate old + create new + HAS_MEMORY + SUPERSEDES + optional App attach.
   // Anchored to User (Spec 09 â€” namespace isolation).
+  // WRITE-SUPERSEDE-NOT-ATOMIC fix: All steps in a single Cypher query.
+  // Invalidate old + create new + HAS_MEMORY + SUPERSEDES + optional App + optional Session.
+  // Anchored to User (Spec 09 — namespace isolation).
+  const supersSessionBlock = sessionId
+    ? `WITH u, new
+     MERGE (u)-[:HAS_SESSION]->(s:Session {id: $sessionId, userId: $userId})
+     ON CREATE SET s.createdAt = $now, s.updatedAt = $now, s.metadata = '{}'
+     ON MATCH SET s.updatedAt = $now
+     CREATE (s)-[:CONTAINS]->(new)`
+    : "";
+
   await runWrite(
     `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(old:Memory {id: $oldId})
      SET old.invalidAt = $now, old.updatedAt = $now
@@ -230,10 +261,12 @@ export async function supersedeMemory(
      MERGE (u)-[:HAS_APP]->(a:App {appName: $appName})
      ON CREATE SET a.id = $appId, a.createdAt = $now, a.isActive = true
      MERGE (new)-[:CREATED_BY]->(a)` : ""}
+     ${supersSessionBlock}
      RETURN new.id AS id`,
     {
       userId, oldId, newId, newContent, embedding, now, tags: effectiveTags,
       ...(appName ? { appName, appId: generateId() } : {}),
+      ...(sessionId ? { sessionId } : {}),
     }
   );
 
@@ -339,4 +372,43 @@ export async function getMemory(
     { userId, id: memoryId }
   );
   return rows[0] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Write: createSession (Spec 10 — Episode/Session nodes)
+// ---------------------------------------------------------------------------
+
+/**
+ * Create or touch a Session node, linking it to the User.
+ * Sessions group memories by conversation episode and support open ontology:
+ * any custom properties can be passed via `metadata` and are stored as a
+ * JSON string on the Session node — no schema migration needed for extensions.
+ *
+ * @param userId     User who owns this session
+ * @param opts.sessionId   Custom session ID (auto-generated if omitted)
+ * @param opts.metadata    Arbitrary caller-controlled properties (open ontology)
+ * @returns The session ID (useful when auto-generated)
+ */
+export async function createSession(
+  userId: string,
+  opts?: { sessionId?: string; metadata?: Record<string, unknown> }
+): Promise<string> {
+  const { generateId: genId } = await import("@/lib/id");
+  const sessionId = opts?.sessionId ?? genId();
+  const now = new Date().toISOString();
+  await runWrite(
+    `MERGE (u:User {userId: $userId})
+     ON CREATE SET u.createdAt = $now
+     WITH u
+     MERGE (u)-[:HAS_SESSION]->(s:Session {id: $sessionId, userId: $userId})
+     ON CREATE SET s.createdAt = $now, s.updatedAt = $now, s.metadata = $metadata
+     ON MATCH SET s.updatedAt = $now`,
+    {
+      userId,
+      sessionId,
+      metadata: opts?.metadata ? JSON.stringify(opts.metadata) : "{}",
+      now,
+    }
+  );
+  return sessionId;
 }

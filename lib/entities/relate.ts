@@ -108,22 +108,31 @@ export async function linkEntities(
   const now = new Date().toISOString();
 
   // Step 1: Check for existing live edge (no invalidAt)
-  const existing = await runRead<{ desc: string; metadata: string | null }>(
+  const existing = await runRead<{ desc: string; metadata: string | null; confirmedCount: number }>(
     `MATCH (src:Entity {id: $sourceId})-[r:RELATED_TO {type: $relType}]->(tgt:Entity {id: $targetId})
      WHERE r.invalidAt IS NULL
-     RETURN coalesce(r.description, '') AS desc, r.metadata AS metadata`,
+     RETURN coalesce(r.description, '') AS desc, r.metadata AS metadata,
+            coalesce(r.confirmedCount, 1) AS confirmedCount`,
     { sourceId: sourceEntityId, targetId: targetEntityId, relType: normalizedRelType }
   );
 
   // Merge incoming metadata with existing edge metadata (for replacement edges)
   const existingEdgeMeta = existing.length > 0 ? parseMetadata(existing[0].metadata) : {};
   const mergedMeta = serializeMetadata(mergeMetadata(existingEdgeMeta, metadata));
+  const existingCount = existing.length > 0 ? (existing[0].confirmedCount ?? 1) : 0;
 
   if (existing.length > 0) {
     const oldDesc = existing[0].desc;
 
-    // P2 Fast-path: identical normalized description → skip entirely
+    // P2 Fast-path: identical normalized description
+    // Increment confirmedCount to track re-assertion strength (open relationship)
     if (normalizeDesc(oldDesc) === normalizeDesc(description)) {
+      await runWrite(
+        `MATCH (src:Entity {id: $sourceId})-[r:RELATED_TO {type: $relType}]->(tgt:Entity {id: $targetId})
+         WHERE r.invalidAt IS NULL
+         SET r.confirmedCount = coalesce(r.confirmedCount, 1) + 1, r.updatedAt = $now`,
+        { sourceId: sourceEntityId, targetId: targetEntityId, relType: normalizedRelType, now }
+      );
       return;
     }
 
@@ -138,7 +147,14 @@ export async function linkEntities(
       );
 
       if (verdict === "SAME") {
-        return; // no change needed
+        // Re-assertion confirmed — increment confirmedCount (open relationship: no cap)
+        await runWrite(
+          `MATCH (src:Entity {id: $sourceId})-[r:RELATED_TO {type: $relType}]->(tgt:Entity {id: $targetId})
+           WHERE r.invalidAt IS NULL
+           SET r.confirmedCount = coalesce(r.confirmedCount, 1) + 1, r.updatedAt = $now`,
+          { sourceId: sourceEntityId, targetId: targetEntityId, relType: normalizedRelType, now }
+        );
+        return; // no structural change needed
       }
 
       // UPDATE or CONTRADICTION → invalidate old, create new
@@ -159,11 +175,13 @@ export async function linkEntities(
     }
   }
 
-  // Step 2: Create new edge (either fresh or replacement for invalidated one)
+  // Step 2: Create new edge (either fresh or replacement for invalidated one).
+  // confirmedCount: carry forward existing count + 1 (UPDATE/CONTRADICTION) or start at 1 (new edge).
   // weight defaults to 0.5 (moderate) if not provided by LLM
   const effectiveWeight = weight !== undefined && isFinite(weight)
     ? Math.max(0, Math.min(1, weight))
     : 0.5;
+  const newConfirmedCount = existingCount > 0 ? existingCount + 1 : 1;
 
   await runWrite(
     `MATCH (src:Entity {id: $sourceId})
@@ -173,6 +191,7 @@ export async function linkEntities(
        description: $desc,
        metadata: $metadata,
        weight: $weight,
+       confirmedCount: $confirmedCount,
        validAt: $now,
        createdAt: $now,
        updatedAt: $now
@@ -185,6 +204,7 @@ export async function linkEntities(
       desc: description,
       metadata: mergedMeta,
       weight: effectiveWeight,
+      confirmedCount: newConfirmedCount,
       now,
     }
   );

@@ -80,15 +80,19 @@ describe("linkEntities", () => {
     expect(params.desc).toBe("");
   });
 
-  it("RELATE_04 (P2): identical normalized description → skip entirely (fast-path)", async () => {
+  it("RELATE_04 (P2): identical normalized description → increments confirmedCount (1 write)", async () => {
     // Existing edge with same description (different whitespace/casing)
-    mockRunRead.mockResolvedValueOnce([{ desc: "Alice works at Acme Corp" }]);
+    mockRunRead.mockResolvedValueOnce([{ desc: "Alice works at Acme Corp", confirmedCount: 2 }]);
+    mockRunWrite.mockResolvedValue([]);
 
     await linkEntities("a", "b", "WORKS_AT", "alice works at acme corp");
 
-    // No writes at all — fast-path dedup
-    expect(mockRunWrite).not.toHaveBeenCalled();
+    // No LLM call — but one write to increment confirmedCount
     expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockRunWrite).toHaveBeenCalledTimes(1);
+    const [cypher] = mockRunWrite.mock.calls[0] as [string, Record<string, unknown>];
+    expect(cypher).toContain("confirmedCount");
+    expect(cypher).toContain("SET");
   });
 
   it("RELATE_05 (P0): LLM says CONTRADICTION → invalidates old, creates new edge", async () => {
@@ -126,17 +130,21 @@ describe("linkEntities", () => {
     expect(mockRunWrite).toHaveBeenCalledTimes(2); // invalidate + create
   });
 
-  it("RELATE_07 (P0): LLM says SAME → no writes at all", async () => {
-    mockRunRead.mockResolvedValueOnce([{ desc: "Alice works at Acme Corp" }]);
+  it("RELATE_07 (P0): LLM says SAME → increments confirmedCount (1 write)", async () => {
+    mockRunRead.mockResolvedValueOnce([{ desc: "Alice works at Acme Corp", confirmedCount: 1 }]);
+    mockRunWrite.mockResolvedValue([]);
     mockCreate.mockResolvedValueOnce({
       choices: [{ message: { content: '{"verdict": "SAME"}' } }],
     });
 
     await linkEntities("a", "b", "WORKS_AT", "Alice is employed at Acme Corp", "Alice", "Acme Corp");
 
-    // LLM called but verdict is SAME → no writes
+    // LLM called, verdict SAME → 1 write to increment confirmedCount (no structural change)
     expect(mockCreate).toHaveBeenCalledTimes(1);
-    expect(mockRunWrite).not.toHaveBeenCalled();
+    expect(mockRunWrite).toHaveBeenCalledTimes(1);
+    const [cypher] = mockRunWrite.mock.calls[0] as [string, Record<string, unknown>];
+    expect(cypher).toContain("confirmedCount");
+    expect(cypher).toContain("SET");
   });
 
   it("RELATE_08 (P0): LLM failure → fail-open UPDATE (invalidate + create)", async () => {
@@ -159,6 +167,59 @@ describe("linkEntities", () => {
     // No LLM call needed (old desc empty) → invalidate old + create new
     expect(mockCreate).not.toHaveBeenCalled();
     expect(mockRunWrite).toHaveBeenCalledTimes(2);
+  });
+
+  it("RELATE_12: new edge → confirmedCount starts at 1", async () => {
+    mockRunRead.mockResolvedValueOnce([]); // no existing edge
+    mockRunWrite.mockResolvedValue([]);
+
+    await linkEntities("src", "tgt", "KNOWS", "Alice knows Bob");
+
+    const params = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
+    expect(params.confirmedCount).toBe(1);
+  });
+
+  it("RELATE_13: fast-path SET cypher increments confirmedCount by 1", async () => {
+    mockRunRead.mockResolvedValueOnce([{ desc: "Same description", confirmedCount: 5 }]);
+    mockRunWrite.mockResolvedValue([]);
+
+    await linkEntities("a", "b", "TYPE", "Same description");
+
+    expect(mockRunWrite).toHaveBeenCalledTimes(1);
+    const cypher = mockRunWrite.mock.calls[0][0] as string;
+    // Cypher increments using coalesce + 1 (not a fixed value)
+    expect(cypher).toContain("confirmedCount");
+    expect(cypher).toContain("coalesce");
+  });
+
+  it("RELATE_14: UPDATE with existing confirmedCount:3 → new edge gets confirmedCount:4", async () => {
+    mockRunRead.mockResolvedValueOnce([{ desc: "Alice works at Acme", confirmedCount: 3 }]);
+    mockRunWrite.mockResolvedValue([]);
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: '{"verdict": "UPDATE"}' } }],
+    });
+
+    await linkEntities("a", "b", "WORKS_AT", "Alice is VP at Acme", "Alice", "Acme");
+
+    // invalidate (call 0) + create (call 1)
+    expect(mockRunWrite).toHaveBeenCalledTimes(2);
+    const createParams = mockRunWrite.mock.calls[1][1] as Record<string, unknown>;
+    expect(createParams.confirmedCount).toBe(4); // existingCount(3) + 1
+  });
+
+  it("RELATE_15: SAME verdict SET cypher increments confirmedCount", async () => {
+    mockRunRead.mockResolvedValueOnce([{ desc: "Alice is VP at Acme", confirmedCount: 4 }]);
+    mockRunWrite.mockResolvedValue([]);
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: '{"verdict": "SAME"}' } }],
+    });
+
+    await linkEntities("a", "b", "WORKS_AT", "Alice is VP at Acme Corp", "Alice", "Acme");
+
+    expect(mockRunWrite).toHaveBeenCalledTimes(1);
+    const cypher = mockRunWrite.mock.calls[0][0] as string;
+    expect(cypher).toContain("confirmedCount");
+    expect(cypher).toContain("SET");
   });
 });
 

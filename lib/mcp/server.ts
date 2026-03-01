@@ -104,6 +104,15 @@ const addMemoriesSchema = {
       "where automatic detection may not recognize the relationship. " +
       "Get the ID from a prior search_memory result."
     ),
+  session_id: z
+    .string()
+    .optional()
+    .describe(
+      "Group this memory with a conversation session or episode. Memories sharing a session_id are " +
+      "linked via (Session)-[:CONTAINS]->(Memory) in the graph. The session node is created " +
+      "automatically if it does not exist. Use any stable string as the ID (e.g. a conversation ID, " +
+      "date string, or workflow run ID). Supports open ontology — sessions can hold custom metadata."
+    ),
 };
 
 export function createMcpServer(userId: string, clientName: string): McpServer {
@@ -128,7 +137,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         "Accepts a single string or an array for batch writes.",
       inputSchema: addMemoriesSchema,
     },
-    async ({ content, categories: explicitCategories, tags: explicitTags, suppress_auto_categories: suppressAutoCategories, replaces: replacesId }) => {
+    async ({ content, categories: explicitCategories, tags: explicitTags, suppress_auto_categories: suppressAutoCategories, replaces: replacesId, session_id: sessionId }) => {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
       if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
 
@@ -240,7 +249,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
             // where automatic dedup detection may not recognize the relationship.
             if (replacesId) {
               console.log(`[MCP] add_memories explicit replaces -- superseding ${replacesId}`);
-              const id = await supersedeMemory(replacesId, text, userId, clientName, explicitTags);
+              const id = await supersedeMemory(replacesId, text, userId, clientName, explicitTags, sessionId);
 
               // Write explicit categories if provided
               if (explicitCategories && explicitCategories.length > 0) {
@@ -281,13 +290,14 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
             let id: string;
             if (dedup.action === "supersede") {
               console.log(`[MCP] add_memories dedup supersede -- superseding ${dedup.existingId}`);
-              id = await supersedeMemory(dedup.existingId, text, userId, clientName, explicitTags);
+              id = await supersedeMemory(dedup.existingId, text, userId, clientName, explicitTags, sessionId);
             } else {
               id = await addMemory(text, {
                 userId,
                 appName: clientName,
                 metadata: { source_app: "memforge", mcp_client: clientName },
                 tags: explicitTags,
+                sessionId,
                 // MCP-CAT-SUPPRESS-AUTO: When caller provides explicit categories
                 // and doesn't explicitly set suppress_auto_categories, auto-default
                 // to true for predictable grouping without LLM-added noise.

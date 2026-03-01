@@ -48,6 +48,7 @@ import {
   archiveMemory,
   pauseMemory,
   getMemory,
+  createSession,
 } from "@/lib/memory/write";
 
 beforeEach(() => {
@@ -391,5 +392,49 @@ describe("getMemory", () => {
     const cypher = mockRunRead.mock.calls[0][0] as string;
     expect(cypher).toContain("User {userId: $userId}");
     expect(cypher).toContain("[:HAS_MEMORY]->");
+  });
+});
+
+// ==========================================================================
+// createSession
+// ==========================================================================
+describe("createSession", () => {
+  test("SESSION_01: addMemory with sessionId includes HAS_SESSION and CONTAINS in cypher", async () => {
+    mockEmbed.mockResolvedValue(new Array(1024).fill(0));
+    mockRunWrite.mockResolvedValue([{ id: "mem-session-1" }]);
+
+    await addMemory("session memory", { userId: "u1", sessionId: "sess-abc" });
+
+    // calls[0] = User MERGE, calls[1] = Memory CREATE (which includes session block)
+    const allCyphers = mockRunWrite.mock.calls.map(c => c[0] as string);
+    const memoryCypher = allCyphers[1];
+    expect(memoryCypher).toContain("HAS_SESSION");
+    expect(memoryCypher).toContain("CONTAINS");
+  });
+
+  test("SESSION_02: addMemory without sessionId does not include HAS_SESSION in cypher", async () => {
+    mockEmbed.mockResolvedValue(new Array(1024).fill(0));
+    mockRunWrite.mockResolvedValue([{ id: "mem-no-session-1" }]);
+
+    await addMemory("no session memory", { userId: "u1" });
+
+    // calls[0] = User MERGE, calls[1] = Memory CREATE (no session block)
+    const allCyphers = mockRunWrite.mock.calls.map(c => c[0] as string);
+    const memoryCypher = allCyphers[1];
+    expect(memoryCypher).not.toContain("HAS_SESSION");
+  });
+
+  test("SESSION_03: createSession returns provided sessionId and calls runWrite", async () => {
+    mockRunWrite.mockResolvedValue([]);
+
+    const id = await createSession("u1", { sessionId: "sess-xyz" });
+
+    expect(id).toBe("sess-xyz");
+    expect(mockRunWrite).toHaveBeenCalledTimes(1);
+    const [cypher, params] = mockRunWrite.mock.calls[0] as [string, Record<string, unknown>];
+    expect(cypher).toContain("MERGE");
+    expect(cypher).toContain("Session");
+    expect(params.userId).toBe("u1");
+    expect(params.sessionId).toBe("sess-xyz");
   });
 });

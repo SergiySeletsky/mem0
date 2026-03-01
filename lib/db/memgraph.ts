@@ -290,6 +290,12 @@ function getSchemaStatements(): string[] {
 
     // Memory History index — audit trail for ADD/SUPERSEDE/DELETE/ARCHIVE/PAUSE
     `CREATE INDEX ON :MemoryHistory(memoryId)`,
+
+    // Session / Episode nodes (Spec 10) — groups memories by conversation session
+    // Open ontology: Session.metadata (JSON) holds arbitrary caller properties
+    `CREATE CONSTRAINT ON (s:Session) ASSERT s.id IS UNIQUE`,
+    `CREATE INDEX ON :Session(userId)`,
+    `CREATE INDEX ON :Session(createdAt)`,
   ];
 }
 

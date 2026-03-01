@@ -28,7 +28,7 @@ const mockSummarize = summarizeCluster as jest.MockedFunction<typeof summarizeCl
 beforeEach(() => {
   jest.clearAllMocks();
   mockRunWrite.mockResolvedValue(undefined as any);
-  mockSummarize.mockResolvedValue({ name: "Test Topic", summary: "A test summary." });
+  mockSummarize.mockResolvedValue({ name: "Test Topic", summary: "A test summary.", rank: 5, findings: [] });
 });
 
 describe("rebuildClusters", () => {

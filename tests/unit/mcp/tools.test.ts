@@ -218,7 +218,7 @@ describe("MCP Tool Handlers â€” add_memories", () => {
     const parsed = parseToolResult(result as any) as any;
     expect(parsed.superseded).toBe(1);
     expect(parsed.ids).toEqual(["superseded-id"]);
-    expect(mockSupersedeMemory).toHaveBeenCalledWith("old-id", "Updated preference", "test-user", "test-client", undefined);
+    expect(mockSupersedeMemory).toHaveBeenCalledWith("old-id", "Updated preference", "test-user", "test-client", undefined, undefined);
   });
 
   it("MCP_TAG_SUPERSEDE: supersede path forwards explicit tags as 5th arg to supersedeMemory (WRITE-04)", async () => {
@@ -241,7 +241,8 @@ describe("MCP Tool Handlers â€” add_memories", () => {
       "Updated pref with tags",
       "test-user",
       "test-client",
-      ["myTag", "project-alpha"]
+      ["myTag", "project-alpha"],
+      undefined // no session_id
     );
   });
 
@@ -1656,7 +1657,8 @@ describe("MCP add_memories â€” SUPERSEDE provenance (dead-code removal)", (
       "Updated finding",
       "test-user",
       "test-client",
-      ["session-17", "session-18"]
+      ["session-17", "session-18"],
+      undefined // no session_id
     );
 
     // No separate SET m.tags runWrite call â€” dead code removed
@@ -2228,7 +2230,8 @@ describe("MCP add_memories â€” explicit replaces parameter", () => {
       "Barcelona trip: now going to Amsterdam instead",
       "test-user",
       "test-client",
-      undefined // no tags
+      undefined, // no tags
+      undefined  // no session_id
     );
 
     // checkDeduplication should NOT be called â€” replaces bypasses dedup
@@ -2253,7 +2256,8 @@ describe("MCP add_memories â€” explicit replaces parameter", () => {
       "Updated travel plan",
       "test-user",
       "test-client",
-      ["travel", "europe-2026"]
+      ["travel", "europe-2026"],
+      undefined // no session_id
     );
   });
 

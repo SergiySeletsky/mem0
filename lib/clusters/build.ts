@@ -23,6 +23,7 @@
 
 import { runRead, runWrite } from "@/lib/db/memgraph";
 import { summarizeCluster } from "./summarize";
+import type { ClusterSummary } from "./summarize";
 import { generateId } from "@/lib/id";
 
 interface CommunityMember {
@@ -44,6 +45,17 @@ export interface CommunityNode {
   id: string;
   name: string;
   summary: string;
+  /**
+   * Centrality rank 1-10 (LLM-estimated). 10 = most central topic.
+   * Enables multi-level reasoning: surface highest-ranked communities first.
+   */
+  rank: number;
+  /**
+   * Key insight bullets from the LLM summarizer (2-5 strings).
+   * Open ontology: stored as a string[] on the Community node — add custom
+   * finding types by appending to this array before persisting.
+   */
+  findings: string[];
   level: number;
   parentId: string | null;
   memberCount: number;
@@ -104,14 +116,16 @@ export async function rebuildClusters(userId: string): Promise<void> {
 
     // --- Level 0 community ---
     const l0Id = generateId();
-    const { name: l0Name, summary: l0Summary } = await summarizeCluster(
+    const l0Result: ClusterSummary = await summarizeCluster(
       members.map((m) => m.content)
     );
 
     allCommunities.push({
       id: l0Id,
-      name: l0Name,
-      summary: l0Summary,
+      name: l0Result.name,
+      summary: l0Result.summary,
+      rank: l0Result.rank,
+      findings: l0Result.findings,
       level: 0,
       parentId: null,
       memberCount: members.length,
@@ -128,13 +142,15 @@ export async function rebuildClusters(userId: string): Promise<void> {
         if (subMembers.length < MIN_COMMUNITY_SIZE) continue;
 
         const l1Id = generateId();
-        const { name: l1Name, summary: l1Summary } = await summarizeCluster(
+        const l1Result: ClusterSummary = await summarizeCluster(
           subMembers.map((m) => m.content)
         );
         allCommunities.push({
           id: l1Id,
-          name: l1Name,
-          summary: l1Summary,
+          name: l1Result.name,
+          summary: l1Result.summary,
+          rank: l1Result.rank,
+          findings: l1Result.findings,
           level: 1,
           parentId: l0Id,
           memberCount: subMembers.length,
@@ -152,6 +168,8 @@ export async function rebuildClusters(userId: string): Promise<void> {
          id:          $cId,
          name:        $name,
          summary:     $summary,
+         rank:        $rank,
+         findings:    $findings,
          level:       $level,
          parentId:    $parentId,
          memberCount: $count,
@@ -168,6 +186,8 @@ export async function rebuildClusters(userId: string): Promise<void> {
         cId: community.id,
         name: community.name,
         summary: community.summary,
+        rank: community.rank,
+        findings: community.findings,
         level: community.level,
         parentId: community.parentId,
         count: community.memberCount,
