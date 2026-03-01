@@ -1159,3 +1159,131 @@ Claimify is a 4-stage claim extraction pipeline (sentence split → selection �
 ### Verification
 - `tsc --noEmit`: **0 errors**
 - `jest --runInBand --no-coverage`: **48 suites / 434 tests — 0 failures** (up from 428)
+
+---
+
+## Session 17 — Agentic Architect Audit (MCP LTM Stress Test) (2026-03-01)
+
+### Objective
+Full read-only codebase audit across 6 layers (DB, write pipeline, search, entity, MCP/API, frontend/config) using MemForge MCP as long-term memory. Designed to test MCP tools in a realistic agentic workflow where findings exceed a single LLM context window.
+
+### MCP Tool Usage Statistics
+
+| # | Tool | Mode | Purpose | Result |
+|---|------|------|---------|--------|
+| 1-2 | search_memory | browse | Cold-start inventory | 0 session-tagged / 79 total |
+| 3 | search_memory | search + tag | Prior session recovery | 11 hits, 8 carryovers |
+| 4-7 | add_memories | batch (4×4) | Store findings | 14 ADD, 2 SUPERSEDE |
+| 8 | search_memory | search + tag | Security recovery test | 3/3 HIGH found |
+| 9 | search_memory | browse + tag | Full inventory | 16/16 (100% recall) |
+| 10 | search_memory | search (no tag) | Cross-session perf | 10 hits across 4 sessions |
+| 11-12 | search_memory | search + tag, browse | Domain + project scope | 49 project memories |
+| **Total** | **4 add / 8 search** | | **16 items** | **14 stored, 2 superseded** |
+
+### Findings Stored (16 total, 12 new + 2 superseded + 2 carryover confirmed)
+
+| ID | Severity | Layer | Status |
+|----|----------|-------|--------|
+| PAUSE-NO-INVALIDAT-01 | MEDIUM | Write | NEW |
+| MCP-SUPERSEDE-TAG-STILL-DEAD-CODE | LOW | MCP | Carryover |
+| DB-CLOSE-NO-LIFECYCLE-01 | LOW | DB | NEW |
+| WRITE-ADDMEM-2RTT-STILL-UNFIXED | LOW-PERF | Write | SUPERSEDED |
+| MCP-ENTITY-REL-NO-TEMPORAL-01 | MEDIUM | Entity | NEW |
+| EXTRACT-GLEANING-NO-CONTEXT-01 | LOW | Entity | NEW |
+| TEXT-SEARCH-NO-TRYCATCH-01 | MEDIUM | Search | NEW |
+| CLUSTER-REBUILD-PARTIAL-WRITE-01 | MEDIUM | Clusters | NEW |
+| HOOK-APPS-UPDATE-BROKEN-01 | HIGH | Frontend | NEW |
+| HOOK-APPS-ACCESSED-NO-AUTH-01 | HIGH-SECURITY | Frontend | NEW |
+| MEMORIES-GET-CAT-POSTFILTER-TOTAL-01 | MEDIUM | API | NEW |
+| HOOK-APPS-STALE-USERID-01 | MEDIUM | Frontend | NEW |
+| CLASSIFY-NO-FENCE-STRIP-01 | LOW | MCP | NEW |
+| MEMORYID-PUT-STILL-NO-ENTITY-EXTRACT-01 | HIGH | API | SUPERSEDED |
+| FILTER-NO-SIZE-BOUNDS-01 | LOW | API | NEW |
+| APPS-NO-TRYCATCH-01 | MEDIUM | API | NEW |
+
+### MCP Tool Scenario Evaluation
+
+| Scenario | Calls | Usefulness | Verdict |
+|----------|-------|------------|---------|
+| Cold-start inventory (browse) | 2 | 10/10 | ESSENTIAL |
+| Carryover recovery (search) | 1 | 10/10 | KEY VALUE |
+| Batched write (add_memories) | 4 | 9/10 | RELIABLE |
+| Tag + semantic search (recovery) | 2 | 9/10 | STRONG |
+| Full session inventory (browse) | 1 | 10/10 | GROUND TRUTH |
+| Cross-session perf query | 1 | 10/10 | EXCEPTIONAL |
+| Project-scoped inventory | 1 | 8/10 | USEFUL |
+
+### What Worked Well
+1. Cross-session dedup — 2 findings correctly superseded across sessions
+2. Tag-scoped browse = 100% recall (16/16)
+3. Dual-arm RRF ranking — cross-session findings at 0.91 relevance
+4. Zero write errors (4×4 = 16 items)
+5. Compact response format saves tokens
+6. Semantic search finds non-keyword matches
+
+### What Can Be Improved
+1. Tag + search should warn when result set << tagged total
+2. SUPERSEDE loses prior session origin tag
+3. No total_matching count in search response
+4. Category auto-enrichment adds noise ("Technology", "Work" on every finding)
+5. No updated_at in search mode results
+6. No intra-batch dedup for same-call items
+
+### Test Baseline (unchanged — read-only audit)
+- **48 suites / 434 tests — ALL PASS**
+
+---
+
+## Session 18 — MCP Improvements Implementation (6 Audit Findings)
+
+### Objective
+Implement 6 MCP improvement opportunities identified in the Session 17 agentic audit report. All improvements add test coverage.
+
+### Improvements Implemented
+
+| # | ID | File(s) | Description |
+|---|-----|---------|-------------|
+| 1 | MCP-UPDATED-AT-01 | hybrid.ts, server.ts | `updated_at` field added to search mode results. `HybridSearchResult` interface gains `updatedAt`; hydration Cypher returns `m.updatedAt`; server maps with fallback to `createdAt` |
+| 2 | MCP-TOTAL-01 | server.ts | `total_matching` count in search response — pre-limit match count so agents know when more results exist beyond the cap |
+| 3 | MCP-TAG-RECALL-01 | server.ts | Tag filter recall warning — when tag post-filter drops >70% of results, response includes `tag_filter_warning` recommending browse mode |
+| 4 | MCP-CAT-SUPPRESS | write.ts, server.ts | `suppress_auto_categories` boolean parameter on `add_memories` — skips LLM auto-categorization fire-and-forget when callers provide explicit categories |
+| 5 | SUPERSEDE-PROVENANCE | write.ts, server.ts | SUPERSEDE provenance tags — `supersedeMemory()` now merges old memory's tags with new explicit tags (deduplicated) so session origin is preserved. Removed dead-code `SET m.tags` runWrite from server.ts (MCP-SUPERSEDE-TAG-01) |
+| 6 | MCP-BATCH-DEDUP | server.ts | Intra-batch dedup — normalized text tracker catches exact duplicate content within the same `add_memories` batch call (case/whitespace-insensitive) before hitting the DB dedup pipeline |
+
+### Tests Added (20 new)
+
+| Test ID | File | Improvement |
+|---------|------|-------------|
+| MCP_UPDATED_AT_01 | tools.test.ts | #1: search results include `updated_at` |
+| MCP_UPDATED_AT_02 | tools.test.ts | #1: fallback to `createdAt` when `updatedAt` missing |
+| MCP_TOTAL_01 | tools.test.ts | #2: `total_matching` > returned count when limit caps |
+| MCP_TOTAL_02 | tools.test.ts | #2: `total_matching` reflects tag post-filter count |
+| MCP_TAG_WARN_01 | tools.test.ts | #3: warning emitted when >70% dropped by tag filter |
+| MCP_TAG_WARN_02 | tools.test.ts | #3: no warning when retention >30% |
+| MCP_TAG_WARN_03 | tools.test.ts | #3: no warning without tag filter |
+| MCP_CAT_SUPPRESS_01 | tools.test.ts | #4: `suppress_auto_categories=true` passes through |
+| MCP_CAT_SUPPRESS_02 | tools.test.ts | #4: default passes `false` |
+| WR_14 | write.test.ts | #4: `suppressAutoCategories=true` skips categorize |
+| WR_15 | write.test.ts | #4: `suppressAutoCategories=false` fires categorize |
+| WR_16 | write.test.ts | #4: omitting option fires categorize (default) |
+| MCP_PROV_01 | tools.test.ts | #5: no separate `SET m.tags` runWrite (dead-code removed) |
+| WR_35 (updated) | write.test.ts | #5: explicit tags merge with old tags (provenance) |
+| MCP_BATCH_DEDUP_01 | tools.test.ts | #6: exact duplicate within batch is skipped |
+| MCP_BATCH_DEDUP_02 | tools.test.ts | #6: case/whitespace-normalized duplicates caught |
+| MCP_BATCH_DEDUP_03 | tools.test.ts | #6: distinct items all processed normally |
+| MCP_BATCH_DEDUP_04 | tools.test.ts | #6: intra-batch dedup only applies to STORE intents |
+
+### Files Modified (4 source + 2 test)
+
+**Source:**
+1. `lib/search/hybrid.ts` — `updatedAt` in `HybridSearchResult` interface + hydration Cypher
+2. `lib/mcp/server.ts` — all 6 improvements: `updated_at` mapping, `total_matching`, tag warning, `suppress_auto_categories` schema+passthrough, dead-code removal, intra-batch dedup
+3. `lib/memory/write.ts` — `suppressAutoCategories` in `AddMemoryOptions` + `addMemory()`, provenance tag merge in `supersedeMemory()`
+
+**Tests:**
+1. `tests/unit/mcp/tools.test.ts` — 16 new tests + 2 existing mocks updated for `updatedAt`
+2. `tests/unit/memory/write.test.ts` — 3 new tests (WR_14–16), 1 updated (WR_35)
+
+### Verification
+- `tsc --noEmit`: **0 errors**
+- `jest --runInBand --no-coverage`: **49 suites / 480 tests — 0 failures** (up from 48/434)

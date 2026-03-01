@@ -84,6 +84,14 @@ const addMemoriesSchema = {
       "Tags are stored on the Memory node and enable precise filtering via search_memory(tag: '...'). " +
       "Unlike categories (semantic labels auto-assigned by LLM), tags are verbatim identifiers you control."
     ),
+  suppress_auto_categories: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true, suppresses LLM auto-categorization for STORE items. " +
+      "Use when you provide explicit categories and don't want the LLM to add noise " +
+      "(e.g. 'Technology', 'Work') on top of your curated labels. Default: false."
+    ),
 };
 
 export function createMcpServer(userId: string, clientName: string): McpServer {
@@ -101,7 +109,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         "Pass a single string or array of strings for batch processing.",
       inputSchema: addMemoriesSchema,
     },
-    async ({ content, categories: explicitCategories, tags: explicitTags }) => {
+    async ({ content, categories: explicitCategories, tags: explicitTags, suppress_auto_categories: suppressAutoCategories }) => {
       if (!userId) return { content: [{ type: "text", text: "Error: user_id not provided" }] };
       if (!clientName) return { content: [{ type: "text", text: "Error: client_name not provided" }] };
 
@@ -140,6 +148,13 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         const results: MemoryResult[] = [];
 
         let prevExtractionPromise: Promise<void> | null = null;
+
+        // MCP-BATCH-DEDUP: Track normalized text of items already processed in this
+        // batch to catch exact duplicates before hitting the DB dedup pipeline.
+        // The DB pipeline handles semantic near-duplicates, but the vector/text index
+        // may have propagation delays within the same batch — this catches identical content.
+        const batchSeenTexts = new Set<string>();
+        const normalizeBatchText = (t: string) => t.toLowerCase().replace(/\s+/g, " ").trim();
 
         for (const text of items) {
           // Drain previous item's entity extraction before starting the next write,
@@ -182,6 +197,14 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
             }
 
             // Step 1: Deduplication pre-write hook (STORE intent)
+            // MCP-BATCH-DEDUP: Check for intra-batch exact duplicate first
+            const normalizedText = normalizeBatchText(text);
+            if (batchSeenTexts.has(normalizedText)) {
+              console.log(`[MCP] add_memories intra-batch skip -- exact duplicate within batch`);
+              results.push({ id: null as unknown as string, memory: text, event: "SKIP_DUPLICATE" });
+              continue;
+            }
+
             const dedup = await checkDeduplication(text, userId);
 
             if (dedup.action === "skip") {
@@ -200,23 +223,11 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
                 appName: clientName,
                 metadata: { source_app: "memforge", mcp_client: clientName },
                 tags: explicitTags,
+                suppressAutoCategories: suppressAutoCategories ?? false,
               });
             }
 
             const event = dedup.action === "supersede" ? "SUPERSEDE" : "ADD";
-
-            // Write explicit tags to the memory node (for both ADD and SUPERSEDE).
-            // supersedeMemory() now accepts tags directly, but for the ADD path
-            // tags are already passed via addMemory opts. Patch only on SUPERSEDE.
-            if (explicitTags && explicitTags.length > 0 && dedup.action === "supersede") {
-              // Tags were not passed to supersedeMemory above; patch them now.
-              // (A future refactor could pass tags to supersedeMemory directly.)
-              await runWrite(
-                `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memId})
-                 SET m.tags = $tags`,
-                { userId, memId: id, tags: explicitTags }
-              ).catch((e: unknown) => console.warn("[explicit tags]", e));
-            }
 
             // Write explicit categories (if provided) in a single UNWIND round-trip (MCP-CAT-01 fix).
             // The LLM auto-categorizer (inside addMemory/supersedeMemory) still runs
@@ -235,6 +246,9 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
             // Spec 04: Async entity extraction -- tracked so next iteration can drain it
             prevExtractionPromise = processEntityExtraction(id)
               .catch((e: unknown) => console.warn("[entity worker]", e));
+
+            // MCP-BATCH-DEDUP: mark this text as seen for intra-batch dedup
+            batchSeenTexts.add(normalizedText);
 
             results.push({ id, memory: text, event });
           } catch (itemErr: unknown) {
@@ -415,9 +429,19 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         }
 
         // Cap to requested limit after post-filtering (MCP-FILTER-01)
+        const totalMatching = filtered.length;
         filtered = filtered.slice(0, effectiveLimit);
 
         console.log(`[MCP] search_memory search done in ${Date.now() - t0}ms hits=${results.length} filtered=${filtered.length}`);
+
+        // MCP-TAG-RECALL-01: warn when tag post-filter drops >70% of results,
+        // indicating the fetchMultiplier may be insufficient or browse mode is better.
+        let tagFilterWarning: string | undefined;
+        if (tag && results.length > 0 && totalMatching < results.length * 0.3) {
+          tagFilterWarning =
+            `Tag filter '${tag}' matched only ${totalMatching} of ${results.length} search results. ` +
+            `For complete recall, use browse mode (no query) with tag filter, which scans all tagged memories.`;
+        }
 
         // Log access for each hit -- fire-and-forget (ACCESS-LOG-01: MERGE to prevent unbounded edge growth)
         if (filtered.length > 0) {
@@ -450,6 +474,9 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
           content: [{
             type: "text",
             text: JSON.stringify({
+              // Total pre-filter matches before limit cap — lets agents know when
+              // more results exist beyond the requested limit (MCP-TOTAL-01).
+              total_matching: totalMatching,
               // Confidence heuristic (MCP-CONFIDENCE-02):
               // RRF single-arm floor â‰ˆ 1/(K+1) where K=60 â†’ 0.0164. Scores above
               // 0.012 indicate at least one arm ranked the result in the top half.
@@ -475,6 +502,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
                   text_rank: r.textRank,
                   vector_rank: r.vectorRank,
                   created_at: r.createdAt,
+                  updated_at: r.updatedAt ?? r.createdAt,
                   categories: r.categories,
                   tags: r.tags ?? [],
                 };
@@ -489,6 +517,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
                   relationships: e.relationships,
                 })),
               } : {}),
+              ...(tagFilterWarning ? { tag_filter_warning: tagFilterWarning } : {}),
             }, null, 2),
           }],
         };

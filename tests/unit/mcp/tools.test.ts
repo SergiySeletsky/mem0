@@ -819,7 +819,7 @@ describe("MCP Tool Handlers -- search_memory entity enrichment", () => {
 
   it("MCP_SM_05: search response includes entity profiles when found", async () => {
     mockHybridSearch.mockResolvedValueOnce([
-      { id: "m1", content: "Alice works at Acme", rrfScore: 0.03, textRank: 1, vectorRank: 1, categories: ["work"], tags: [], createdAt: "2024-01-01", appName: "test-client" },
+      { id: "m1", content: "Alice works at Acme", rrfScore: 0.03, textRank: 1, vectorRank: 1, categories: ["work"], tags: [], createdAt: "2024-01-01", updatedAt: "2024-01-01", appName: "test-client" },
     ]);
     mockRunRead.mockResolvedValueOnce([{ appName: "test-client", lastAccessed: "2024-01-01" }]);
     mockSearchEntities.mockResolvedValueOnce([
@@ -849,7 +849,7 @@ describe("MCP Tool Handlers -- search_memory entity enrichment", () => {
 
   it("MCP_SM_06: include_entities=false skips entity enrichment", async () => {
     mockHybridSearch.mockResolvedValueOnce([
-      { id: "m1", content: "Alice works at Acme", rrfScore: 0.03, textRank: 1, vectorRank: 1, categories: ["work"], tags: [], createdAt: "2024-01-01", appName: "test-client" },
+      { id: "m1", content: "Alice works at Acme", rrfScore: 0.03, textRank: 1, vectorRank: 1, categories: ["work"], tags: [], createdAt: "2024-01-01", updatedAt: "2024-01-01", appName: "test-client" },
     ]);
     mockRunRead.mockResolvedValueOnce([{ appName: "test-client", lastAccessed: "2024-01-01" }]);
 
@@ -1141,5 +1141,421 @@ describe("MCP add_memories — global drain budget (MCP-02)", () => {
     expect(parsed.ids).toEqual(["id-1", "id-2", "id-3", "id-4", "id-5"]);
 
     jest.useRealTimers();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: Improvement #1 — updated_at in search results (MCP-UPDATED-AT-01)
+// ---------------------------------------------------------------------------
+describe("MCP search_memory — updated_at in search results", () => {
+  let client: Client;
+
+  beforeAll(async () => {
+    ({ client } = await setupClientServer());
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRunRead.mockReset();
+    mockRunRead.mockResolvedValue([]);
+    mockRunWrite.mockResolvedValue([]);
+    mockSearchEntities.mockResolvedValue([]);
+  });
+
+  it("MCP_UPDATED_AT_01: search mode results include updated_at field", async () => {
+    mockHybridSearch.mockResolvedValueOnce([
+      {
+        id: "m1", content: "Alice works at Acme", rrfScore: 0.03, textRank: 1, vectorRank: 1,
+        categories: ["work"], tags: [], createdAt: "2026-01-01", updatedAt: "2026-01-15", appName: "test-client",
+      },
+    ]);
+    mockRunWrite.mockResolvedValueOnce([]);
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "Alice" },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toHaveLength(1);
+    expect(parsed.results[0]).toHaveProperty("created_at", "2026-01-01");
+    expect(parsed.results[0]).toHaveProperty("updated_at", "2026-01-15");
+  });
+
+  it("MCP_UPDATED_AT_02: updated_at defaults to empty string when missing from hybrid result", async () => {
+    mockHybridSearch.mockResolvedValueOnce([
+      {
+        id: "m1", content: "No updatedAt field", rrfScore: 0.03, textRank: 1, vectorRank: 1,
+        categories: [], tags: [], createdAt: "2026-01-01", appName: "test-client",
+        // updatedAt intentionally omitted — cast to simulate old data without the field
+      } as any,
+    ]);
+    mockRunWrite.mockResolvedValueOnce([]);
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "test" },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    // When updatedAt is missing from hybrid result, should fall back to createdAt
+    expect(parsed.results[0]).toHaveProperty("updated_at", "2026-01-01");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: Improvement #2 — total_matching in search results (MCP-TOTAL-01)
+// ---------------------------------------------------------------------------
+describe("MCP search_memory — total_matching count", () => {
+  let client: Client;
+
+  beforeAll(async () => {
+    ({ client } = await setupClientServer());
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRunRead.mockReset();
+    mockRunRead.mockResolvedValue([]);
+    mockRunWrite.mockResolvedValue([]);
+    mockSearchEntities.mockResolvedValue([]);
+  });
+
+  it("MCP_TOTAL_01: total_matching reflects pre-limit count when results exceed limit", async () => {
+    // Return 5 results but request limit=2
+    mockHybridSearch.mockResolvedValueOnce([
+      { id: "m1", content: "Mem 1", rrfScore: 0.05, textRank: 1, vectorRank: 1, categories: [], tags: [], createdAt: "2026-01-05", updatedAt: "2026-01-05", appName: "test-client" },
+      { id: "m2", content: "Mem 2", rrfScore: 0.04, textRank: 2, vectorRank: 2, categories: [], tags: [], createdAt: "2026-01-04", updatedAt: "2026-01-04", appName: "test-client" },
+      { id: "m3", content: "Mem 3", rrfScore: 0.03, textRank: 3, vectorRank: 3, categories: [], tags: [], createdAt: "2026-01-03", updatedAt: "2026-01-03", appName: "test-client" },
+      { id: "m4", content: "Mem 4", rrfScore: 0.02, textRank: 4, vectorRank: 4, categories: [], tags: [], createdAt: "2026-01-02", updatedAt: "2026-01-02", appName: "test-client" },
+      { id: "m5", content: "Mem 5", rrfScore: 0.01, textRank: 5, vectorRank: 5, categories: [], tags: [], createdAt: "2026-01-01", updatedAt: "2026-01-01", appName: "test-client" },
+    ]);
+    mockRunWrite.mockResolvedValueOnce([]);
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "test", limit: 2 },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    // total_matching = 5 (all results matched), but only 2 returned
+    expect(parsed.total_matching).toBe(5);
+    expect(parsed.results).toHaveLength(2);
+  });
+
+  it("MCP_TOTAL_02: total_matching reflects post-filter count when tag filter applied", async () => {
+    mockHybridSearch.mockResolvedValueOnce([
+      { id: "m1", content: "Tagged", rrfScore: 0.05, textRank: 1, vectorRank: 1, categories: [], tags: ["audit"], createdAt: "2026-01-05", updatedAt: "2026-01-05", appName: "test-client" },
+      { id: "m2", content: "Untagged", rrfScore: 0.04, textRank: 2, vectorRank: 2, categories: [], tags: [], createdAt: "2026-01-04", updatedAt: "2026-01-04", appName: "test-client" },
+      { id: "m3", content: "Also tagged", rrfScore: 0.03, textRank: 3, vectorRank: 3, categories: [], tags: ["audit"], createdAt: "2026-01-03", updatedAt: "2026-01-03", appName: "test-client" },
+    ]);
+    mockRunWrite.mockResolvedValueOnce([]);
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "test", tag: "audit", limit: 10 },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    // total_matching = 2 (only 2 matched the tag), all 2 returned (under limit)
+    expect(parsed.total_matching).toBe(2);
+    expect(parsed.results).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: Improvement #3 — tag_filter_warning (MCP-TAG-RECALL-01)
+// ---------------------------------------------------------------------------
+describe("MCP search_memory — tag filter recall warning", () => {
+  let client: Client;
+
+  beforeAll(async () => {
+    ({ client } = await setupClientServer());
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRunRead.mockReset();
+    mockRunRead.mockResolvedValue([]);
+    mockRunWrite.mockResolvedValue([]);
+    mockSearchEntities.mockResolvedValue([]);
+  });
+
+  it("MCP_TAG_WARN_01: warning emitted when tag filter drops >70% of results", async () => {
+    // 10 results from hybridSearch, only 1 has the tag → 10% retention → warning
+    const results = Array.from({ length: 10 }, (_, i) => ({
+      id: `m${i + 1}`,
+      content: `Memory ${i + 1}`,
+      rrfScore: 0.05 - i * 0.004,
+      textRank: i + 1,
+      vectorRank: i + 1,
+      categories: [],
+      tags: i === 0 ? ["rare-tag"] : [],
+      createdAt: "2026-01-01",
+      updatedAt: "2026-01-01",
+      appName: "test-client",
+    }));
+    mockHybridSearch.mockResolvedValueOnce(results);
+    mockRunWrite.mockResolvedValueOnce([]);
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "test", tag: "rare-tag" },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toHaveLength(1);
+    expect(parsed).toHaveProperty("tag_filter_warning");
+    expect(parsed.tag_filter_warning).toContain("rare-tag");
+    expect(parsed.tag_filter_warning).toContain("browse mode");
+  });
+
+  it("MCP_TAG_WARN_02: no warning when tag filter retains >30% of results", async () => {
+    // 3 results, 2 have the tag → 67% retention → no warning
+    mockHybridSearch.mockResolvedValueOnce([
+      { id: "m1", content: "A", rrfScore: 0.05, textRank: 1, vectorRank: 1, categories: [], tags: ["common-tag"], createdAt: "2026-01-01", updatedAt: "2026-01-01", appName: "test-client" },
+      { id: "m2", content: "B", rrfScore: 0.04, textRank: 2, vectorRank: 2, categories: [], tags: ["common-tag"], createdAt: "2026-01-01", updatedAt: "2026-01-01", appName: "test-client" },
+      { id: "m3", content: "C", rrfScore: 0.03, textRank: 3, vectorRank: 3, categories: [], tags: [], createdAt: "2026-01-01", updatedAt: "2026-01-01", appName: "test-client" },
+    ]);
+    mockRunWrite.mockResolvedValueOnce([]);
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "test", tag: "common-tag" },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toHaveLength(2);
+    expect(parsed).not.toHaveProperty("tag_filter_warning");
+  });
+
+  it("MCP_TAG_WARN_03: no warning when no tag filter is applied", async () => {
+    mockHybridSearch.mockResolvedValueOnce([
+      { id: "m1", content: "A", rrfScore: 0.05, textRank: 1, vectorRank: 1, categories: [], tags: [], createdAt: "2026-01-01", updatedAt: "2026-01-01", appName: "test-client" },
+    ]);
+    mockRunWrite.mockResolvedValueOnce([]);
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "test" },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed).not.toHaveProperty("tag_filter_warning");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: Improvement #4 — suppress_auto_categories (MCP-CAT-SUPPRESS)
+// ---------------------------------------------------------------------------
+describe("MCP add_memories — suppress_auto_categories", () => {
+  let client: Client;
+
+  beforeAll(async () => {
+    ({ client } = await setupClientServer());
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRunRead.mockReset();
+    mockRunRead.mockResolvedValue([]);
+    mockRunWrite.mockResolvedValue([]);
+    mockClassifyIntent.mockResolvedValue({ type: "STORE" as const });
+    mockSearchEntities.mockResolvedValue([]);
+  });
+
+  it("MCP_CAT_SUPPRESS_01: suppress_auto_categories=true passes suppressAutoCategories to addMemory", async () => {
+    mockCheckDeduplication.mockResolvedValueOnce({ action: "add" } as any);
+    mockAddMemory.mockResolvedValueOnce("cat-sup-id");
+    mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
+
+    await client.callTool({
+      name: "add_memories",
+      arguments: {
+        content: "A finding about security",
+        categories: ["Security"],
+        suppress_auto_categories: true,
+      },
+    });
+
+    expect(mockAddMemory).toHaveBeenCalledWith(
+      "A finding about security",
+      expect.objectContaining({
+        suppressAutoCategories: true,
+      })
+    );
+  });
+
+  it("MCP_CAT_SUPPRESS_02: without suppress_auto_categories, addMemory receives false", async () => {
+    mockCheckDeduplication.mockResolvedValueOnce({ action: "add" } as any);
+    mockAddMemory.mockResolvedValueOnce("cat-no-sup-id");
+    mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
+
+    await client.callTool({
+      name: "add_memories",
+      arguments: {
+        content: "A normal memory",
+        categories: ["Work"],
+      },
+    });
+
+    expect(mockAddMemory).toHaveBeenCalledWith(
+      "A normal memory",
+      expect.objectContaining({
+        suppressAutoCategories: false,
+      })
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: Improvement #5 — SUPERSEDE provenance tags (SUPERSEDE-PROVENANCE)
+// ---------------------------------------------------------------------------
+// Note: provenance tag merging happens in write.ts (supersedeMemory), not in
+// server.ts. The MCP layer forwards explicit tags to supersedeMemory. The merge
+// logic is tested in write.test.ts. Here we verify the dead-code SET m.tags
+// was removed (MCP-SUPERSEDE-TAG-01) and tags are passed correctly.
+describe("MCP add_memories — SUPERSEDE provenance (dead-code removal)", () => {
+  let client: Client;
+
+  beforeAll(async () => {
+    ({ client } = await setupClientServer());
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRunRead.mockReset();
+    mockRunRead.mockResolvedValue([]);
+    mockRunWrite.mockResolvedValue([]);
+    mockClassifyIntent.mockResolvedValue({ type: "STORE" as const });
+    mockSearchEntities.mockResolvedValue([]);
+  });
+
+  it("MCP_PROV_01: supersede path does NOT issue separate SET m.tags runWrite (dead-code removed)", async () => {
+    mockCheckDeduplication.mockResolvedValueOnce({
+      action: "supersede",
+      existingId: "old-prov-id",
+    } as any);
+    mockSupersedeMemory.mockResolvedValueOnce("new-prov-id");
+    mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
+
+    await client.callTool({
+      name: "add_memories",
+      arguments: { content: "Updated finding", tags: ["session-17", "session-18"] },
+    });
+
+    // supersedeMemory called with tags
+    expect(mockSupersedeMemory).toHaveBeenCalledWith(
+      "old-prov-id",
+      "Updated finding",
+      "test-user",
+      "test-client",
+      ["session-17", "session-18"]
+    );
+
+    // No separate SET m.tags runWrite call — dead code removed
+    const tagWriteCalls = mockRunWrite.mock.calls.filter(
+      (c) => typeof c[0] === "string" && (c[0] as string).includes("SET m.tags")
+    );
+    expect(tagWriteCalls).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: Improvement #6 — intra-batch dedup (MCP-BATCH-DEDUP)
+// ---------------------------------------------------------------------------
+describe("MCP add_memories — intra-batch dedup", () => {
+  let client: Client;
+
+  beforeAll(async () => {
+    ({ client } = await setupClientServer());
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRunRead.mockReset();
+    mockRunRead.mockResolvedValue([]);
+    mockRunWrite.mockResolvedValue([]);
+    mockClassifyIntent.mockResolvedValue({ type: "STORE" as const });
+    mockSearchEntities.mockResolvedValue([]);
+  });
+
+  it("MCP_BATCH_DEDUP_01: exact duplicate within batch is skipped", async () => {
+    // Two identical items in the same batch
+    mockCheckDeduplication.mockResolvedValueOnce({ action: "add" } as any);
+    mockAddMemory.mockResolvedValueOnce("first-id");
+    mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
+
+    const result = await client.callTool({
+      name: "add_memories",
+      arguments: { content: ["Alice likes coffee", "Alice likes coffee"] },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    // First item stored, second skipped as intra-batch duplicate
+    expect(parsed.stored).toBe(1);
+    expect(parsed.skipped).toBe(1);
+    expect(parsed.ids).toEqual(["first-id"]);
+    // checkDeduplication only called once (for the first item)
+    expect(mockCheckDeduplication).toHaveBeenCalledTimes(1);
+  });
+
+  it("MCP_BATCH_DEDUP_02: case/whitespace-normalized duplicates are caught", async () => {
+    mockCheckDeduplication.mockResolvedValueOnce({ action: "add" } as any);
+    mockAddMemory.mockResolvedValueOnce("first-id");
+    mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
+
+    const result = await client.callTool({
+      name: "add_memories",
+      arguments: { content: ["Alice likes coffee", "  alice   likes   COFFEE  "] },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.stored).toBe(1);
+    expect(parsed.skipped).toBe(1);
+  });
+
+  it("MCP_BATCH_DEDUP_03: distinct items in batch are all processed", async () => {
+    mockCheckDeduplication
+      .mockResolvedValueOnce({ action: "add" } as any)
+      .mockResolvedValueOnce({ action: "add" } as any)
+      .mockResolvedValueOnce({ action: "add" } as any);
+    mockAddMemory
+      .mockResolvedValueOnce("id-1")
+      .mockResolvedValueOnce("id-2")
+      .mockResolvedValueOnce("id-3");
+    mockProcessEntityExtraction.mockResolvedValue(undefined);
+
+    const result = await client.callTool({
+      name: "add_memories",
+      arguments: { content: ["Fact one", "Fact two", "Fact three"] },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.stored).toBe(3);
+    expect(parsed.ids).toEqual(["id-1", "id-2", "id-3"]);
+    expect(mockCheckDeduplication).toHaveBeenCalledTimes(3);
+  });
+
+  it("MCP_BATCH_DEDUP_04: intra-batch dedup only applies to STORE intents", async () => {
+    // Item 1 is STORE (gets added), item 2 has different intent (INVALIDATE)
+    // → should NOT be caught by intra-batch dedup (intent is checked before dedup)
+    mockClassifyIntent
+      .mockResolvedValueOnce({ type: "STORE" as const })
+      .mockResolvedValueOnce({ type: "INVALIDATE" as const, target: "coffee" });
+    mockCheckDeduplication.mockResolvedValueOnce({ action: "add" } as any);
+    mockAddMemory.mockResolvedValueOnce("stored-id");
+    mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
+    mockInvalidateMemories.mockResolvedValueOnce([]);
+
+    const result = await client.callTool({
+      name: "add_memories",
+      arguments: { content: ["Alice likes coffee", "Forget Alice likes coffee"] },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.stored).toBe(1);
+    // INVALIDATE intent is not skipped — it processed independently
+    expect(mockInvalidateMemories).toHaveBeenCalled();
   });
 });

@@ -151,6 +151,21 @@ describe("addMemory", () => {
     const params = mockRunWrite.mock.calls[1][1] as Record<string, unknown>;
     expect(params.tags).toEqual([]);
   });
+
+  test("WR_14: suppressAutoCategories=true skips categorizeMemory call", async () => {
+    await addMemory("test", { userId: "u1", suppressAutoCategories: true });
+    expect(mockCategorize).not.toHaveBeenCalled();
+  });
+
+  test("WR_15: suppressAutoCategories=false still fires categorizeMemory", async () => {
+    await addMemory("test", { userId: "u1", suppressAutoCategories: false });
+    expect(mockCategorize).toHaveBeenCalledWith(expect.any(String), "test");
+  });
+
+  test("WR_16: omitting suppressAutoCategories fires categorizeMemory (default behavior)", async () => {
+    await addMemory("test", { userId: "u1" });
+    expect(mockCategorize).toHaveBeenCalledWith(expect.any(String), "test");
+  });
 });
 
 // ==========================================================================
@@ -245,17 +260,21 @@ describe("supersedeMemory", () => {
     expect(writeParams.tags).toEqual(["session-17", "production"]);
   });
 
-  test("WR_35: explicit tags bypass tag-inheritance runRead", async () => {
-    // When caller provides tags explicitly, no runRead should occur
-    await supersedeMemory("old-id", "new content", "u1", undefined, ["explicit-tag"]);
+  test("WR_35: explicit tags merge with old tags (SUPERSEDE-PROVENANCE)", async () => {
+    // When caller provides tags, they are merged with old memory's tags (deduplicated)
+    mockRunRead.mockResolvedValueOnce([{ tags: ["session-7", "project-alpha"] }]);
 
-    // runRead must NOT have been called (we skip the tag fetch entirely)
-    expect(mockRunRead).not.toHaveBeenCalled();
+    await supersedeMemory("old-id", "new content", "u1", undefined, ["session-9", "project-alpha"]);
 
-    // runWrite must write the explicitly provided tags
+    // runRead IS called (to fetch old tags for provenance merge)
+    expect(mockRunRead).toHaveBeenCalledTimes(1);
+
+    // runWrite must write the merged, deduplicated tags
     expect(mockRunWrite).toHaveBeenCalledTimes(1);
     const writeParams = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
-    expect(writeParams.tags).toEqual(["explicit-tag"]);
+    // session-9 (new) + session-7, project-alpha (old) — project-alpha deduplicated
+    expect(writeParams.tags).toEqual(expect.arrayContaining(["session-9", "project-alpha", "session-7"]));
+    expect((writeParams.tags as string[]).length).toBe(3);
   });
 
   test("WR_36: tag inheritance falls back to empty array when old node has no tags", async () => {

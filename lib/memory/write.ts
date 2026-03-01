@@ -32,6 +32,8 @@ export interface AddMemoryOptions {
   metadata?: Record<string, unknown>;
   /** Explicit tags for scoped retrieval via search_memory(tag: "..."). */
   tags?: string[];
+  /** When true, skip the LLM auto-categorization fire-and-forget call. */
+  suppressAutoCategories?: boolean;
 }
 
 export interface MemoryNode {
@@ -64,7 +66,7 @@ export async function addMemory(
   text: string,
   opts: AddMemoryOptions
 ): Promise<string> {
-  const { userId, appName, metadata, tags } = opts;
+  const { userId, appName, metadata, tags, suppressAutoCategories } = opts;
   const id = generateId();
   const now = new Date().toISOString();
 
@@ -122,7 +124,10 @@ export async function addMemory(
   );
 
   // Async categorization — fire-and-forget, never blocks response
-  categorizeMemory(id, text).catch((e) => console.warn("[categorize]", e));
+  // MCP-CAT-SUPPRESS: skip when caller provides explicit categories and opts out of auto-categorization
+  if (!suppressAutoCategories) {
+    categorizeMemory(id, text).catch((e) => console.warn("[categorize]", e));
+  }
 
   // Async audit trail — fire-and-forget
   addHistory(id, null, text, "ADD").catch((e) => console.warn("[history]", e));
@@ -187,15 +192,21 @@ export async function supersedeMemory(
   const newId = generateId();
   const embedding = await embed(newContent);
 
-  // Inherit tags from old memory when not explicitly provided (WRITE-04 fix)
-  let effectiveTags = tags;
-  if (!effectiveTags) {
-    const oldRows = await runRead<{ tags: string[] }>(
-      `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $oldId})
-       RETURN coalesce(m.tags, []) AS tags`,
-      { userId, oldId }
-    );
-    effectiveTags = oldRows[0]?.tags ?? [];
+  // SUPERSEDE-PROVENANCE: merge old tags with new tags (deduplicated) so that
+  // the superseding memory preserves origin/session tags from the old memory.
+  // When no explicit tags provided, inherit old tags verbatim (backward compat).
+  const oldRows = await runRead<{ tags: string[] }>(
+    `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $oldId})
+     RETURN coalesce(m.tags, []) AS tags`,
+    { userId, oldId }
+  );
+  const oldTags = oldRows[0]?.tags ?? [];
+  let effectiveTags: string[];
+  if (tags && tags.length > 0) {
+    // Merge: new explicit tags + old provenance tags, deduplicated (case-sensitive)
+    effectiveTags = [...new Set([...tags, ...oldTags])];
+  } else {
+    effectiveTags = oldTags;
   }
 
   // WRITE-SUPERSEDE-NOT-ATOMIC fix: All steps in a single Cypher query.
