@@ -23,8 +23,9 @@
 | 15 â€” Frontend + API Audit | 22 new findings; 8 HIGH (frontend) | Stale closure, namespace violation, N+1 categorize documented in AUDIT_REPORT_SESSION15.md |
 | 13 â€" Graphiti-Inspired Enhancements | P0â€"P3: temporal edges, entity summaries, fast-path dedup, context injection | Bi-temporal edges + contradiction LLM, entity profile gen, fast-path normalized dedup, previous-memory context for extraction. 46 suites / 418 tests. |
 | 14 â€" Agentic Architect Audit (MCP LTM) | Full repo audit across 8 code layers using MCP as LTM | 24 findings stored (20 ADD, 4 SUPERSEDE); 6 MCP recovery tests; MCP tool evaluation report below. |
+| 16 â€" Claimify-Inspired Fact Quality | Self-containment + atomic decomposition in extract-facts | Pronoun resolution, temporal resolution, compound fact splitting in user + agent prompts. 48 suites / 434 tests. |
 
-**Test baseline after completed sessions:** 418 tests, 46 suites, 0 failures
+**Test baseline after completed sessions:** 434 tests, 48 suites, 0 failures
 
 ---
 
@@ -1106,49 +1107,55 @@ Implement 7 high-priority fixes from Session 14 audit findings, with test covera
 - `tsc --noEmit`: **0 errors**
 - `jest --runInBand --no-coverage`: **48 suites / 428 tests — 0 failures** (up from 46/418)
 
-## Session 15 — Audit Findings Implementation (P0–P2)
+---
+
+## Session 16 — Claimify-Inspired Fact Extraction Quality (2026-03-01)
 
 ### Objective
-Implement 7 high-priority fixes from Session 14 audit findings, with test coverage.
+Implement two high-value techniques from Microsoft Research's Claimify paper (ACL 2025) to improve extracted memory quality: self-containment (pronoun/reference resolution) and atomic fact decomposition.
 
-### Fixes Applied
+### Analysis Summary
+Claimify is a 4-stage claim extraction pipeline (sentence split → selection → disambiguation → decomposition) designed for fact-checking LLM outputs. After deep comparison:
+- **MemForge already superior** in: knowledge graph structure, bi-temporal management, dedup pipeline, multi-pass gleaning, co-reference context injection
+- **Claimify techniques adopted**: self-containment rules (resolve pronouns/temporal refs) and atomic decomposition (split compound facts)
+- **Not adopted**: verifiability filter (would discard opinions/preferences — core memory types), ambiguity flagging (low ROI given entity dedup)
 
-| ID | Severity | File | Fix |
-|----|----------|------|-----|
-| API-APPS-NO-USER-ANCHOR-01 | HIGH-SECURITY | app/api/v1/apps/[appId]/route.ts | GET now requires `user_id` and anchors App lookup through `(u:User)-[:HAS_APP]->(a:App)` instead of bare `(a:App)` |
-| API-APPS-PUT-NO-AUTH-01 | HIGH-SECURITY | app/api/v1/apps/[appId]/route.ts | PUT now requires `user_id` and anchors update through `(u:User)-[:HAS_APP]->(a:App)` |
-| SEARCH-HYDRATE-NO-BITEMPORAL-01 | MEDIUM | lib/search/hybrid.ts | Added `WHERE m.invalidAt IS NULL` to hydration UNWIND query — defense-in-depth against invalidated memories leaking into results |
-| WRITE-SUPERSEDE-NOT-ATOMIC-01 | MEDIUM | lib/memory/write.ts | Merged App attachment into the same Cypher query as invalidate+create+link — `supersedeMemory()` now uses 1 `runWrite` call (was 2) with inline `MERGE App + CREATED_BY` |
-| WRITE-ARCHIVE-NO-INVALIDAT-01 | MEDIUM | lib/memory/write.ts | `archiveMemory()` now sets `m.invalidAt = $now` — archived memories correctly excluded from bi-temporal queries (`WHERE m.invalidAt IS NULL`) |
-| ENTITY-ENRICH-N-PLUS-1-01 | MEDIUM-PERF | lib/mcp/entities.ts | Replaced per-entity for-loop relationship fetch with single UNWIND batch query — 1 DB round-trip instead of N |
-| CONFIG-NO-TTL-CACHE-01 | MEDIUM-PERF | lib/config/helpers.ts | Added 30s TTL cache for `getConfigFromDb()` — `getDedupConfig()` and `getContextWindowConfig()` no longer hit Memgraph on every `addMemory()` call. `saveConfigToDb()` invalidates cache. Exported `invalidateConfigCache()` for tests. |
+### Changes Made
 
-### Tests Added/Updated
+**File: `lib/memory/extract-facts.ts`**
 
-| File | Change | Tests |
-|------|--------|-------|
-| tests/unit/routes/apps-security.test.ts | NEW | APPS_SEC_01–04: GET/PUT require user_id, anchor through User |
-| tests/unit/config/config-cache.test.ts | NEW | CONFIG_TTL_01–04: TTL cache hit/miss, save invalidation, manual invalidation |
-| tests/unit/mcp/entities.test.ts | UPDATED | ENTITY_SEARCH_01–07,11: relationship mocks updated for UNWIND batch; added ENTITY_SEARCH_11 (verifies single UNWIND for N entities) |
-| tests/unit/memory/write.test.ts | UPDATED | WR_31: updated for 1-call supersede (was 2); Added WR_53: archiveMemory sets invalidAt |
-| tests/unit/config/dedup-config.test.ts | UPDATED | Added `invalidateConfigCache()` to beforeEach for TTL cache compatibility |
+**User-mode prompt — 3 enhancements:**
+1. **Self-Containment Rules section**: Explicit instructions to resolve all pronouns (he/she/they/it → actual names), temporal references (yesterday → concrete date), implicit references (the project → actual project name), and preserve critical context qualifiers
+2. **Atomic Decomposition Rules section**: Each fact MUST contain exactly ONE piece of information; compound statements MUST be split
+3. **Updated few-shot examples** (4 original + 3 new): meeting example resolves "We" and splits compound; movies split to individual facts; Google example (NEW) resolves "she" → "Sarah"; Italy example (NEW) resolves pronouns + temporal refs
 
-### Files Modified (7 source + 5 test)
+**Agent-mode prompt — 3 enhancements:**
+1. **Self-Containment Rules section**: Pronoun resolution + implicit reference resolution
+2. **Atomic Decomposition Rules section**: Same splitting rules with agent-specific examples
+3. **Updated few-shot examples**: movies split to individual; Python/JS example (NEW) splits 3 capabilities into atomic facts
 
-**Source:**
-1. `app/api/v1/apps/[appId]/route.ts` — User anchor + user_id required
-2. `lib/search/hybrid.ts` — invalidAt IS NULL in hydration
-3. `lib/memory/write.ts` — atomic supersede, archive invalidAt
-4. `lib/mcp/entities.ts` — UNWIND batch relationships
-5. `lib/config/helpers.ts` — TTL cache + invalidation
+### Why These Changes Matter
 
-**Tests:**
-1. `tests/unit/routes/apps-security.test.ts` (new, 4 tests)
-2. `tests/unit/config/config-cache.test.ts` (new, 4 tests)
-3. `tests/unit/mcp/entities.test.ts` (updated, +1 new test)
-4. `tests/unit/memory/write.test.ts` (updated, +1 new test)
-5. `tests/unit/config/dedup-config.test.ts` (updated for cache compat)
+| Dimension | Before | After |
+|-----------|--------|-------|
+| Pronoun resolution | Not enforced | Resolved — "He prefers VS Code" → "John prefers VS Code" |
+| Temporal references | "yesterday" stored literally | Resolved to concrete date |
+| Compound facts | "Name is John and is a Software engineer" | Split into 2 atomic facts |
+| Dedup accuracy | Compound facts harder to match | Atomic facts match more precisely |
+| Search recall | Diluted vector on compound | Focused facts score higher |
+| SUPERSEDE precision | Superseding compound affects all sub-facts | Each fact superseded independently |
+
+### Tests Added (6 new)
+
+| Test | Description |
+|------|-------------|
+| FACTS_10 | User prompt contains Self-Containment Rules section |
+| FACTS_11 | User prompt contains Atomic Decomposition Rules section |
+| FACTS_12 | Agent prompt contains Self-Containment Rules section |
+| FACTS_13 | Agent prompt contains Atomic Decomposition Rules section |
+| FACTS_14 | User few-shots demonstrate pronoun resolution (Emily, Sarah, Google) |
+| FACTS_15 | User few-shots demonstrate atomic splitting (individual movies, separate name/role) |
 
 ### Verification
 - `tsc --noEmit`: **0 errors**
-- `jest --runInBand --no-coverage`: **48 suites / 428 tests — 0 failures** (up from 46/418)
+- `jest --runInBand --no-coverage`: **48 suites / 434 tests — 0 failures** (up from 428)

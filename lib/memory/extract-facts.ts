@@ -76,6 +76,21 @@ Types of Information to Remember:
 7. Miscellaneous Information Management: Keep track of favorite books, movies, brands, and other miscellaneous details that the user shares.
 8. Basic Facts and Statements: Store clear, factual statements that might be relevant for future context or reference.
 
+### Self-Containment Rules (CRITICAL)
+
+Each extracted fact MUST be understandable on its own, without the original conversation.
+1. **Resolve all pronouns**: Replace "he", "she", "they", "it", "we", "his", "her", "their" with the actual names or nouns they refer to.
+2. **Resolve temporal references**: Replace "yesterday", "tomorrow", "next week", "last month", "next year" with concrete dates when possible (today is ${new Date().toISOString().split("T")[0]}).
+3. **Resolve implicit references**: Replace "the project", "that place", "the meeting", "the company" with the actual name mentioned in the conversation.
+4. **Preserve critical context**: If a fact would be misleading without a qualifier, include the qualifier (e.g., "prefers dark mode for coding" not just "prefers dark mode").
+
+### Atomic Decomposition Rules (CRITICAL)
+
+Each fact MUST contain exactly ONE piece of information. Compound statements MUST be split into individual facts.
+- "Name is John and is a software engineer" → two separate facts: "Name is John" and "Is a software engineer"
+- "Had a meeting with John and discussed the new project" → two separate facts: "Had a meeting with John" and "Discussed the new project with John"
+- "Likes pizza and pasta" → two separate facts: "Likes pizza" and "Likes pasta"
+
 Here are some few shot examples:
 
 User: Hi.
@@ -92,15 +107,23 @@ Output: {"facts" : ["Looking for a restaurant in San Francisco"]}
 
 User: Yesterday, I had a meeting with John at 3pm. We discussed the new project.
 Assistant: Sounds like a productive meeting. I'm always eager to hear about new projects.
-Output: {"facts" : ["Had a meeting with John at 3pm and discussed the new project"]}
+Output: {"facts" : ["Had a meeting with John at 3pm on ${(() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split("T")[0]; })()}", "Discussed the new project with John"]}
 
 User: Hi, my name is John. I am a software engineer.
 Assistant: Nice to meet you, John! My name is Alex and I admire software engineering. How can I help?
-Output: {"facts" : ["Name is John", "Is a Software engineer"]}
+Output: {"facts" : ["Name is John", "Is a software engineer"]}
 
 User: Me favourite movies are Inception and Interstellar. What are yours?
 Assistant: Great choices! Both are fantastic movies. I enjoy them too. Mine are The Dark Knight and The Shawshank Redemption.
-Output: {"facts" : ["Favourite movies are Inception and Interstellar"]}
+Output: {"facts" : ["Favourite movie is Inception", "Favourite movie is Interstellar"]}
+
+User: I work at Google as a senior engineer. My manager is Sarah and she's great.
+Assistant: Google is a great company! Sounds like you have a good team.
+Output: {"facts" : ["Works at Google", "Is a senior engineer at Google", "Manager is Sarah at Google"]}
+
+User: We went to Italy last summer with my wife Emily. She loved the pasta in Rome.
+Assistant: Italy is beautiful!
+Output: {"facts" : ["Went to Italy in the summer of ${new Date().getFullYear() - 1}", "Wife's name is Emily", "Emily loved the pasta in Rome"]}
 
 Return the facts and preferences in a JSON format as shown above. You MUST return a valid JSON object with a 'facts' key containing an array of strings.
 
@@ -115,7 +138,9 @@ Remember the following:
 - DO NOT RETURN ANYTHING ELSE OTHER THAN THE JSON FORMAT.
 - DO NOT ADD ANY ADDITIONAL TEXT OR CODEBLOCK IN THE JSON FIELDS WHICH MAKE IT INVALID SUCH AS "\`\`\`json" OR "\`\`\`".
 - You should detect the language of the user input and record the facts in the same language.
-- For basic factual statements, break them down into individual facts if they contain multiple pieces of information.
+- Each fact MUST be self-contained — resolve all pronouns and references to explicit names.
+- Each fact MUST be atomic — contain exactly ONE piece of information. Split compound statements.
+- Resolve temporal references (yesterday, next week, etc.) to concrete dates using today's date.
 
 Following is a conversation between the user and the assistant. You have to extract the relevant facts and preferences about the user, if any, from the conversation and return them in the JSON format as shown above.
 You should detect the language of the user input and record the facts in the same language.
@@ -146,6 +171,19 @@ Types of Information to Remember:
 6. Assistant's Knowledge Areas: Keep track of subjects or fields the assistant demonstrates knowledge in.
 7. Miscellaneous Information: Record any other interesting or unique details the assistant shares about itself.
 
+### Self-Containment Rules (CRITICAL)
+
+Each extracted fact MUST be understandable on its own, without the original conversation.
+1. **Resolve all pronouns**: Replace "he", "she", "they", "it", "we", "his", "her", "their" with the actual names or nouns they refer to.
+2. **Resolve implicit references**: Replace "the user", "that topic", "the question" with the actual subject mentioned in the conversation.
+3. **Preserve critical context**: If a fact would be misleading without a qualifier, include the qualifier.
+
+### Atomic Decomposition Rules (CRITICAL)
+
+Each fact MUST contain exactly ONE piece of information. Compound statements MUST be split into individual facts.
+- "Admires software engineering and enjoys helping with code" → two separate facts
+- "Favourite movies are Dark Knight and Shawshank Redemption" → two separate facts
+
 Here are some few shot examples:
 
 User: Hi, I am looking for a restaurant in San Francisco.
@@ -158,11 +196,15 @@ Output: {"facts" : []}
 
 User: Hi, my name is John. I am a software engineer.
 Assistant: Nice to meet you, John! My name is Alex and I admire software engineering. How can I help?
-Output: {"facts" : ["Admires software engineering", "Name is Alex"]}
+Output: {"facts" : ["Name is Alex", "Admires software engineering"]}
 
 User: Me favourite movies are Inception and Interstellar. What are yours?
 Assistant: Great choices! Both are fantastic movies. Mine are The Dark Knight and The Shawshank Redemption.
-Output: {"facts" : ["Favourite movies are Dark Knight and Shawshank Redemption"]}
+Output: {"facts" : ["Favourite movie is The Dark Knight", "Favourite movie is The Shawshank Redemption"]}
+
+User: Can you help me with Python?
+Assistant: Absolutely! I specialize in Python and JavaScript. I also know a lot about machine learning frameworks.
+Output: {"facts" : ["Specializes in Python", "Specializes in JavaScript", "Knowledgeable about machine learning frameworks"]}
 
 Return the facts and preferences in a JSON format as shown above. You MUST return a valid JSON object with a 'facts' key containing an array of strings.
 
@@ -177,6 +219,8 @@ Remember the following:
 - DO NOT RETURN ANYTHING ELSE OTHER THAN THE JSON FORMAT.
 - DO NOT ADD ANY ADDITIONAL TEXT OR CODEBLOCK IN THE JSON FIELDS WHICH MAKE IT INVALID SUCH AS "\`\`\`json" OR "\`\`\`".
 - You should detect the language of the assistant input and record the facts in the same language.
+- Each fact MUST be self-contained — resolve all pronouns and references to explicit names.
+- Each fact MUST be atomic — contain exactly ONE piece of information. Split compound statements.
 
 Following is a conversation between the user and the assistant. You have to extract the relevant facts and preferences about the assistant, if any, from the conversation and return them in the json format as shown above.
 `;

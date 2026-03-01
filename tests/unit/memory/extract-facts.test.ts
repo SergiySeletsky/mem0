@@ -11,6 +11,12 @@ export {};
  * FACTS_07: formatConversation filters system messages
  * FACTS_08: removeCodeBlocks strips fenced blocks
  * FACTS_09: Blank facts are filtered out
+ * FACTS_10: User prompt contains self-containment rules
+ * FACTS_11: User prompt contains atomic decomposition rules
+ * FACTS_12: Agent prompt contains self-containment rules
+ * FACTS_13: Agent prompt contains atomic decomposition rules
+ * FACTS_14: User prompt few-shots demonstrate pronoun resolution
+ * FACTS_15: User prompt few-shots demonstrate atomic splitting
  */
 import {
   extractFactsFromConversation,
@@ -183,5 +189,56 @@ describe("getFactRetrievalMessages", () => {
     const [sys, usr] = getFactRetrievalMessages("Assistant: Hello", true);
     expect(sys).toContain("Assistant Information Organizer");
     expect(usr).toContain("Assistant: Hello");
+  });
+
+  it("FACTS_10: user prompt contains self-containment rules", () => {
+    const [sys] = getFactRetrievalMessages("User: Hi", false);
+    expect(sys).toContain("Self-Containment Rules");
+    expect(sys).toContain("Resolve all pronouns");
+    expect(sys).toContain("Resolve temporal references");
+    expect(sys).toContain("Resolve implicit references");
+    expect(sys).toContain("self-contained");
+  });
+
+  it("FACTS_11: user prompt contains atomic decomposition rules", () => {
+    const [sys] = getFactRetrievalMessages("User: Hi", false);
+    expect(sys).toContain("Atomic Decomposition Rules");
+    expect(sys).toContain("exactly ONE piece of information");
+    expect(sys).toContain("Compound statements MUST be split");
+    expect(sys).toContain("atomic");
+  });
+
+  it("FACTS_12: agent prompt contains self-containment rules", () => {
+    const [sys] = getFactRetrievalMessages("Assistant: Hello", true);
+    expect(sys).toContain("Self-Containment Rules");
+    expect(sys).toContain("Resolve all pronouns");
+    expect(sys).toContain("self-contained");
+  });
+
+  it("FACTS_13: agent prompt contains atomic decomposition rules", () => {
+    const [sys] = getFactRetrievalMessages("Assistant: Hello", true);
+    expect(sys).toContain("Atomic Decomposition Rules");
+    expect(sys).toContain("exactly ONE piece of information");
+    expect(sys).toContain("atomic");
+  });
+
+  it("FACTS_14: user prompt few-shots demonstrate pronoun resolution", () => {
+    const [sys] = getFactRetrievalMessages("User: Hi", false);
+    // The Italy example resolves "She loved" → "Emily loved"
+    expect(sys).toContain("Emily loved the pasta in Rome");
+    // The Google example resolves implicit company reference
+    expect(sys).toContain("Works at Google");
+    expect(sys).toContain("Manager is Sarah at Google");
+  });
+
+  it("FACTS_15: user prompt few-shots demonstrate atomic splitting", () => {
+    const [sys] = getFactRetrievalMessages("User: Hi", false);
+    // Movies split into individual facts not compound
+    expect(sys).toContain("Favourite movie is Inception");
+    expect(sys).toContain("Favourite movie is Interstellar");
+    // The few-shot output for "Hi, my name is John. I am a software engineer"
+    // produces two separate facts, not a compound joined by "and"
+    expect(sys).toMatch(/"Name is John"/);
+    expect(sys).toMatch(/"Is a software engineer"/);
   });
 });
