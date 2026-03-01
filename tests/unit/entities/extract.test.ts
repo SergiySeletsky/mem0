@@ -213,3 +213,41 @@ describe("extractEntitiesAndRelationships — P3 edge weight", () => {
     expect(result.relationships[0].weight).toBeUndefined();
   });
 });
+
+describe("extractEntitiesAndRelationships — Opt 2 categories", () => {
+  it("EXTRACT_11: extraction returns categories when LLM includes them in JSON response", async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            entities: [{ name: "Alice", type: "PERSON", description: "Engineer" }],
+            relationships: [],
+            categories: ["Work", "Technology"],
+          }),
+        },
+      }],
+    });
+
+    const result = await extractEntitiesAndRelationships("Alice pushed code to GitHub");
+
+    expect(result.categories).toEqual(["Work", "Technology"]);
+  });
+
+  it("EXTRACT_12: extraction returns empty categories when LLM omits them", async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            entities: [],
+            relationships: [],
+            // no categories field
+          }),
+        },
+      }],
+    });
+
+    const result = await extractEntitiesAndRelationships("I went for a run");
+
+    expect(result.categories).toEqual([]);
+  });
+});

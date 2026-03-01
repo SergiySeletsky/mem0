@@ -240,20 +240,16 @@ export async function runTransaction<T = Record<string, unknown>>(
 
 /**
  * Resolve the embedding vector dimension from environment.
- * Matches the logic in lib/embeddings/openai.ts so the vector index is
+ * Matches the logic in lib/embeddings/intelli.ts so the vector index is
  * always created with the correct dimension for the selected provider.
  *
  * EMBEDDING_PROVIDER=intelli (default) → 1024 (intelli-embed-v3)
- * EMBEDDING_PROVIDER=azure             → 1536 (Azure text-embedding-3-small)
- * EMBEDDING_PROVIDER=nomic             → 768 (nomic-embed-text-v1.5)
+ * EMBEDDING_PROVIDER=azure             → 1024 (Azure; override via EMBEDDING_DIMS)
  * EMBEDDING_DIMS override              → whatever is set
  */
 function resolveEmbedDim(): number {
   const provider = (process.env.EMBEDDING_PROVIDER ?? "intelli").toLowerCase();
-  let defaultDim: string;
-  if (provider === "nomic") defaultDim = "768";
-  else if (provider === "azure") defaultDim = "1536";
-  else defaultDim = "1024"; // intelli-embed-v3
+  const defaultDim = provider === "azure" ? "1024" : "1024"; // both providers default to 1024
   return parseInt(process.env.EMBEDDING_DIMS ?? defaultDim, 10);
 }
 

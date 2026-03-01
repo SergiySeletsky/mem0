@@ -16,6 +16,8 @@
 
 import { runRead } from "@/lib/db/memgraph";
 import { getLLMClient } from "@/lib/ai/client";
+// Used for vector-seeding path (avoids LLM term extraction)
+const VECTOR_SEED_LIMIT = 8; // top-N memories to use for entity seeding
 
 // ---------------------------------------------------------------------------
 // Types
@@ -126,77 +128,135 @@ export function extractSearchTermsRegex(query: string): string[] {
 export async function traverseEntityGraph(
   query: string,
   userId: string,
-  options?: { limit?: number; maxDepth?: number },
+  options?: { limit?: number; maxDepth?: number; queryVector?: number[] },
 ): Promise<GraphTraversalResult[]> {
   const limit = options?.limit ?? 20;
   const maxDepth = Math.max(1, Math.min(options?.maxDepth ?? 2, 5));
-  const terms = await extractSearchTerms(query);
-  if (terms.length === 0) return [];
 
-  // Step 1: Find seed entities matching query terms in name, description, or metadata
-  const seedRows = await runRead<{ entityId: string }>(
-    `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity)
-     WHERE ANY(term IN $terms WHERE
-       toLower(e.name) CONTAINS term
-       OR (e.description IS NOT NULL AND toLower(e.description) CONTAINS term)
-       OR (e.metadata IS NOT NULL AND toLower(e.metadata) CONTAINS term)
-     )
-     RETURN e.id AS entityId
-     LIMIT 10`,
-    { userId, terms },
-  );
+  let allSeedIds: string[];
+  let communitySeedIds: string[];
 
-  // Step 1b: Find entities connected via relationships matching query terms
-  // (relationship type, description, or metadata)
-  let relSeedIds: string[] = [];
-  try {
-    const relRows = await runRead<{ entityId: string }>(
-      `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity)-[r:RELATED_TO]-(neighbor:Entity)
-       WHERE r.invalidAt IS NULL
-         AND ANY(term IN $terms WHERE
-           toLower(coalesce(r.type, '')) CONTAINS term
-           OR toLower(coalesce(r.description, '')) CONTAINS term
-           OR toLower(coalesce(r.metadata, '')) CONTAINS term
-         )
-       WITH collect(DISTINCT e.id) + collect(DISTINCT neighbor.id) AS ids
-       UNWIND ids AS entityId
-       RETURN DISTINCT entityId
+  if (options?.queryVector) {
+    // ----------------------------------------------------------------
+    // VECTOR SEEDING PATH — no LLM call
+    // Use the pre-computed query embedding to find seed entities directly
+    // by finding the top-N most relevant Memory nodes and extracting
+    // their entity mentions as seeds. This replaces both term-based seeding
+    // arms (entity name/description/metadata containment + relationship
+    // metadata containment) with a single vector round-trip.
+    // ----------------------------------------------------------------
+    const queryVec = options.queryVector;
+
+    // Step 1 (vector): Find seed entities via relevant memories
+    let vectorSeedIds: string[] = [];
+    try {
+      const seedRows = await runRead<{ entityId: string }>(
+        `CALL vector_search.search("memory_vectors", toInteger($topK), $queryVec)
+         YIELD node, similarity
+         MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(node)
+         WHERE node.invalidAt IS NULL AND node.state <> 'deleted'
+         MATCH (node)-[:MENTIONS]->(e:Entity)<-[:HAS_ENTITY]-(u)
+         RETURN DISTINCT e.id AS entityId
+         LIMIT 10`,
+        { userId, topK: VECTOR_SEED_LIMIT * 2, queryVec },
+      );
+      vectorSeedIds = seedRows.map((r) => r.entityId);
+    } catch {
+      // Vector seeding failed — return empty (no fallback to LLM in this path)
+    }
+    allSeedIds = vectorSeedIds;
+
+    // P4 — DRIFT-style community priming via vector (no LLM)
+    // Find communities of the top vector-matched memories, inject their
+    // member entities as additional seeds for global→local bridging.
+    communitySeedIds = [];
+    try {
+      const communityRows = await runRead<{ entityId: string }>(
+        `CALL vector_search.search("memory_vectors", toInteger($topK), $queryVec)
+         YIELD node, similarity
+         MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(node)
+         WHERE node.invalidAt IS NULL AND node.state <> 'deleted'
+         WITH node LIMIT 3
+         MATCH (node)-[:IN_COMMUNITY]->(c:Community)
+         MATCH (m2:Memory)-[:IN_COMMUNITY]->(c)
+         WHERE m2.invalidAt IS NULL
+         MATCH (m2)-[:MENTIONS]->(e:Entity)<-[:HAS_ENTITY]-(u)
+         WHERE NOT e.id IN $directSeedIds
+         RETURN DISTINCT e.id AS entityId
+         LIMIT 20`,
+        { userId, topK: VECTOR_SEED_LIMIT, queryVec, directSeedIds: allSeedIds },
+      );
+      communitySeedIds = communityRows.map((r) => r.entityId);
+    } catch {
+      // Community priming is best-effort
+    }
+  } else {
+    // ----------------------------------------------------------------
+    // TERM SEEDING PATH — LLM-based with regex fallback
+    // ----------------------------------------------------------------
+    const terms = await extractSearchTerms(query);
+    if (terms.length === 0) return [];
+
+    // Step 1: Find seed entities matching query terms in name, description, or metadata
+    const seedRows = await runRead<{ entityId: string }>(
+      `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity)
+       WHERE ANY(term IN $terms WHERE
+         toLower(e.name) CONTAINS term
+         OR (e.description IS NOT NULL AND toLower(e.description) CONTAINS term)
+         OR (e.metadata IS NOT NULL AND toLower(e.metadata) CONTAINS term)
+       )
+       RETURN e.id AS entityId
        LIMIT 10`,
       { userId, terms },
     );
-    relSeedIds = relRows.map((r) => r.entityId);
-  } catch {
-    // Relationship metadata search is best-effort
-  }
 
-  // Merge seed entity IDs from both arms
-  const allSeedIds = [...new Set([...seedRows.map((r) => r.entityId), ...relSeedIds])];
+    // Step 1b: Find entities connected via relationships matching query terms
+    let relSeedIds: string[] = [];
+    try {
+      const relRows = await runRead<{ entityId: string }>(
+        `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity)-[r:RELATED_TO]-(neighbor:Entity)
+         WHERE r.invalidAt IS NULL
+           AND ANY(term IN $terms WHERE
+             toLower(coalesce(r.type, '')) CONTAINS term
+             OR toLower(coalesce(r.description, '')) CONTAINS term
+             OR toLower(coalesce(r.metadata, '')) CONTAINS term
+           )
+         WITH collect(DISTINCT e.id) + collect(DISTINCT neighbor.id) AS ids
+         UNWIND ids AS entityId
+         RETURN DISTINCT entityId
+         LIMIT 10`,
+        { userId, terms },
+      );
+      relSeedIds = relRows.map((r) => r.entityId);
+    } catch {
+      // Relationship metadata search is best-effort
+    }
 
-  // P4 — DRIFT-style community priming: find communities whose name or summary
-  // matches query terms, then inject their member entities as additional seeds.
-  // This provides a "global → local" bridge: community-level thematic matches
-  // expand the traversal to entities the user hasn't directly mentioned.
-  let communitySeedIds: string[] = [];
-  try {
-    const communityRows = await runRead<{ entityId: string }>(
-      `MATCH (u:User {userId: $userId})-[:HAS_COMMUNITY]->(c:Community)
-       WHERE ANY(term IN $terms WHERE
-         toLower(c.name) CONTAINS term
-         OR toLower(c.summary) CONTAINS term
-       )
-       WITH c LIMIT 3
-       MATCH (m:Memory)-[:IN_COMMUNITY]->(c)
-       WHERE m.invalidAt IS NULL
-       MATCH (m)-[:MENTIONS]->(e:Entity)<-[:HAS_ENTITY]-(u)
-       RETURN DISTINCT e.id AS entityId
-       LIMIT 20`,
-      { userId, terms },
-    );
-    communitySeedIds = communityRows
-      .map((r) => r.entityId)
-      .filter((id) => !allSeedIds.includes(id)); // avoid duplicates with direct seeds
-  } catch {
-    // Community priming is best-effort — skip on any failure
+    allSeedIds = [...new Set([...seedRows.map((r) => r.entityId), ...relSeedIds])];
+
+    // P4 — DRIFT-style community priming (term-based)
+    communitySeedIds = [];
+    try {
+      const communityRows = await runRead<{ entityId: string }>(
+        `MATCH (u:User {userId: $userId})-[:HAS_COMMUNITY]->(c:Community)
+         WHERE ANY(term IN $terms WHERE
+           toLower(c.name) CONTAINS term
+           OR toLower(c.summary) CONTAINS term
+         )
+         WITH c LIMIT 3
+         MATCH (m:Memory)-[:IN_COMMUNITY]->(c)
+         WHERE m.invalidAt IS NULL
+         MATCH (m)-[:MENTIONS]->(e:Entity)<-[:HAS_ENTITY]-(u)
+         RETURN DISTINCT e.id AS entityId
+         LIMIT 20`,
+        { userId, terms },
+      );
+      communitySeedIds = communityRows
+        .map((r) => r.entityId)
+        .filter((id) => !allSeedIds.includes(id));
+    } catch {
+      // Community priming is best-effort
+    }
   }
 
   // Merge all seeds: direct entity matches + community-primed entities

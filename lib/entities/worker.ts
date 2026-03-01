@@ -25,13 +25,19 @@ import { linkEntities } from "./relate";
 import { summarizeEntityDescription } from "./summarize-description";
 import { generateEntitySummary, getEntityMentionCount, SUMMARY_THRESHOLD } from "./summarize-entity";
 import { updateEntityRank } from "./rank";
+import { applyCategories, categorizeMemory } from "@/lib/memory/categorize";
 
 /** Local copy — avoids dependency on resolve.ts being mocked in tests. */
 function normalizeName(name: string): string {
   return name.toLowerCase().replace(/[\s\-_./\\]+/g, "");
 }
 
-export async function processEntityExtraction(memoryId: string): Promise<void> {
+export interface ExtractionWorkerOptions {
+  /** When true, skip writing categories (neither from extraction result nor LLM fallback). */
+  suppressCategories?: boolean;
+}
+
+export async function processEntityExtraction(memoryId: string, options?: ExtractionWorkerOptions): Promise<void> {
   // Step 1: fetch memory content and current extraction status
   const check = await runRead<{ status: string | null; content: string }>(
     `MATCH (m:Memory {id: $memoryId}) RETURN m.extractionStatus AS status, m.content AS content`,
@@ -70,9 +76,25 @@ export async function processEntityExtraction(memoryId: string): Promise<void> {
     ).catch(() => []);
     const previousMemories = recentRows.map((r) => r.content);
 
-    // Step 4b: Combined LLM extraction (entities + relationships)
-    const { entities: extracted, relationships } =
+    // Step 4b: Combined LLM extraction (entities + relationships + categories)
+    const { entities: extracted, relationships, categories: extractedCategories } =
       await extractEntitiesAndRelationships(content as string, { previousMemories });
+
+    // Step 4c: Write categories (no LLM call — reuse results from extraction prompt).
+    // Fast path: use categories the extraction LLM already returned.
+    // Fallback: fire LLM categorizer if extraction returned nothing.
+    if (!options?.suppressCategories) {
+      const cats = extractedCategories ?? [];
+      if (cats.length > 0) {
+        applyCategories(memoryId, cats).catch((e: unknown) =>
+          console.warn("[worker] applyCategories failed:", e)
+        );
+      } else {
+        categorizeMemory(memoryId, content as string).catch((e: unknown) =>
+          console.warn("[worker] categorize fallback failed:", e)
+        );
+      }
+    }
 
     // ENTITY-01: Tier 1 batch — look up all normalizedNames in one UNWIND round-trip.
     const validEntities = extracted.filter((e) => e.name?.trim());

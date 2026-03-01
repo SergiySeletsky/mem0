@@ -91,7 +91,7 @@ describe("SPEC 02: Hybrid Search Orchestrator", () => {
     await hybridSearch("python developer", { userId: "alice", topK: 5, mode: "hybrid" });
 
     expect(mockTextSearch).toHaveBeenCalledWith("python developer", "alice", expect.any(Number));
-    expect(mockVectorSearch).toHaveBeenCalledWith("python developer", "alice", expect.any(Number));
+    expect(mockVectorSearch).toHaveBeenCalledWith("python developer", "alice", expect.any(Number), expect.objectContaining({ queryVector: undefined }));
   });
 
   // -------------------------------------------------------------------------

@@ -1,5 +1,5 @@
-/**
- * lib/entities/resolve.ts â€” Entity resolution / find-or-create (Spec 04)
+﻿/**
+ * lib/entities/resolve.ts Ã¢â‚¬â€ Entity resolution / find-or-create (Spec 04)
  *
  * Uses Cypher to atomically find or create an Entity node for the user.
  * Entities are matched by normalizedName (lowercased + stripped punctuation/spaces)
@@ -8,19 +8,19 @@
  *
  * Three-tier resolution:
  *   1. normalizedName exact match (e.g. "orderservice")
- *   2. PERSON alias match (prefix/suffix word-boundary, e.g. "Alice" â†” "Alice Chen")
- *   3. Semantic dedup â€” embed name+description and cosine-match against existing
+ *   2. PERSON alias match (prefix/suffix word-boundary, e.g. "Alice" Ã¢â€ â€ "Alice Chen")
+ *   3. Semantic dedup Ã¢â‚¬â€ embed name+description and cosine-match against existing
  *      entities, then confirm via LLM before merging (threshold: 0.88)
  *
  * Type upgrade rules (open ontology):
- *   - OTHER (rank 99) is the lowest â€” always upgradeable from it.
+ *   - OTHER (rank 99) is the lowest Ã¢â‚¬â€ always upgradeable from it.
  *   - CONCEPT (rank 6) upgrades from OTHER only.
  *   - Domain-specific types (not in TYPE_PRIORITY; rank 5) beat CONCEPT but
  *     lose to PERSON / ORGANIZATION / LOCATION / PRODUCT.
  *   - When merging, the most informative (lowest rank) type wins.
  */
 import { runRead, runWrite } from "@/lib/db/memgraph";
-import { embed } from "@/lib/embeddings/openai";
+import { embed } from "@/lib/embeddings/intelli";
 import { getLLMClient } from "@/lib/ai/client";
 import { buildEntityMergePrompt } from "./prompts";
 import { generateId } from "@/lib/id";
@@ -46,7 +46,7 @@ export function normalizeName(name: string): string {
 /**
  * Explicit priority for the 6 well-known base types plus space for domain types.
  * Domain-specific types (NOT listed here) fall back to DOMAIN_TYPE_DEFAULT_RANK,
- * which places them BETWEEN PRODUCT and CONCEPT â€” i.e. more specific than CONCEPT
+ * which places them BETWEEN PRODUCT and CONCEPT Ã¢â‚¬â€ i.e. more specific than CONCEPT
  * but less specific than PERSON / ORGANIZATION / LOCATION / PRODUCT.
  */
 const TYPE_PRIORITY: Record<string, number> = {
@@ -174,7 +174,7 @@ async function findEntityBySemantic(
     const confirmed = await confirmMergeViaLLM(extracted, best);
     return confirmed ? best : null;
   } catch {
-    // Graceful degradation â€” embed unavailable or index missing
+    // Graceful degradation Ã¢â‚¬â€ embed unavailable or index missing
     return null;
   }
 }
@@ -239,7 +239,7 @@ export async function resolveEntity(
   );
 
   // Step 2: Find existing entity by normalizedName (case+punctuation-insensitive)
-  // Read-only lookup â€” use runRead to avoid consuming a write-session slot.
+  // Read-only lookup Ã¢â‚¬â€ use runRead to avoid consuming a write-session slot.
   let existing = await runRead<{
     id: string;
     name: string;
@@ -256,7 +256,7 @@ export async function resolveEntity(
 
   // Step 2b: Name-alias resolution for PERSON entities (Eval v4 Finding 2)
   // If no normalised match and entity is a PERSON, check prefix/suffix word-boundary
-  // matches: "Alice" â†” "Alice Chen".
+  // matches: "Alice" Ã¢â€ â€ "Alice Chen".
   if (existing.length === 0 && normalizedType === "PERSON") {
     existing = await runRead<{
       id: string;
@@ -288,7 +288,7 @@ export async function resolveEntity(
     }
   }
 
-  // Step 2c: Semantic dedup â€” embed name+description, vector-search entity_vectors,
+  // Step 2c: Semantic dedup Ã¢â‚¬â€ embed name+description, vector-search entity_vectors,
   // confirm top match via LLM before merging.  Fails open (no match) when embed is
   // unavailable or the LLM rejects the merge.
   if (existing.length === 0) {
@@ -301,7 +301,7 @@ export async function resolveEntity(
   let entityId: string;
 
   if (existing.length > 0) {
-    // Entity exists â€” update type if more specific, description if longer
+    // Entity exists Ã¢â‚¬â€ update type if more specific, description if longer
     entityId = existing[0].id;
     const shouldUpgradeType = isMoreSpecific(normalizedType, existing[0].type);
     const shouldUpgradeDesc =
@@ -342,13 +342,13 @@ export async function resolveEntity(
       );
     }
   } else {
-    // ENTITY-DUP-FIX: use MERGE on (userId, normalizedName) via the Userâ†’Entity
+    // ENTITY-DUP-FIX: use MERGE on (userId, normalizedName) via the UserÃ¢â€ â€™Entity
     // relationship pattern instead of CREATE. Memgraph acquires an exclusive
     // internal lock on the matched edge pattern, so two concurrent callers for
-    // the same entity produce exactly one node â€” eliminating the TOCTOU race
+    // the same entity produce exactly one node Ã¢â‚¬â€ eliminating the TOCTOU race
     // that produced duplicate Entity nodes during parallel test runs.
     //
-    // ON MATCH: no-op â€” this branch only runs when the 3-tier lookup above found
+    // ON MATCH: no-op Ã¢â‚¬â€ this branch only runs when the 3-tier lookup above found
     // nothing, so a concurrent writer beat us here. We get its entity id back.
     const created = await runWrite<{ entityId: string }>(
       `MATCH (u:User {userId: $userId})
@@ -369,7 +369,7 @@ export async function resolveEntity(
         now,
       }
     );
-    // Use the id returned by MERGE â€” may differ from $id if a concurrent writer
+    // Use the id returned by MERGE Ã¢â‚¬â€ may differ from $id if a concurrent writer
     // beat us to the CREATE (in which case we reuse their entity, not ours).
     entityId = created[0]?.entityId ?? id;
   }
@@ -387,7 +387,7 @@ export async function resolveEntity(
 
 /**
  * Embed the entity description and store the vector on the Entity node.
- * Called fire-and-forget â€” failures are logged but do not block the pipeline.
+ * Called fire-and-forget Ã¢â‚¬â€ failures are logged but do not block the pipeline.
  */
 async function embedDescriptionAsync(
   entityId: string,

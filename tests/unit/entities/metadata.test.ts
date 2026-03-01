@@ -1,31 +1,31 @@
-export {};
+﻿export {};
 /**
- * Unit tests — Open Metadata on Entity nodes and RELATED_TO edges
+ * Unit tests â€” Open Metadata on Entity nodes and RELATED_TO edges
  *
  * Tests metadata flow through the full pipeline:
- *   extraction → normalization → resolveEntity → linkEntities → searchEntities → MCP
+ *   extraction â†’ normalization â†’ resolveEntity â†’ linkEntities â†’ searchEntities â†’ MCP
  *
  * METADATA HELPERS (resolve.ts exports):
- *   META_SERIALIZE_01–03: serializeMetadata
- *   META_PARSE_01–05: parseMetadata
- *   META_MERGE_01–05: mergeMetadata
+ *   META_SERIALIZE_01â€“03: serializeMetadata
+ *   META_PARSE_01â€“05: parseMetadata
+ *   META_MERGE_01â€“05: mergeMetadata
  *
- * EXTRACTION (extract.ts — via public API):
- *   META_EXTRACT_01–04: Entity/relationship metadata normalization
+ * EXTRACTION (extract.ts â€” via public API):
+ *   META_EXTRACT_01â€“04: Entity/relationship metadata normalization
  *
  * RESOLVE (resolveEntity):
  *   META_RESOLVE_CREATE_01: New entity stores metadata
- *   META_RESOLVE_UPDATE_01–03: Existing entity metadata merge / no-op
+ *   META_RESOLVE_UPDATE_01â€“03: Existing entity metadata merge / no-op
  *
  * RELATE (linkEntities):
- *   META_RELATE_01–03: Edge metadata create / merge / default
+ *   META_RELATE_01â€“03: Edge metadata create / merge / default
  *
  * SEARCH (searchEntities):
- *   META_SEARCH_01–03: Entity & relationship metadata in profiles
+ *   META_SEARCH_01â€“03: Entity & relationship metadata in profiles
  */
 
 // -----------------------------------------------------------------------
-// Mocks — DB, embedding, LLM (all real implementations use these)
+// Mocks â€” DB, embedding, LLM (all real implementations use these)
 // -----------------------------------------------------------------------
 
 const mockRunRead = jest.fn();
@@ -38,7 +38,7 @@ jest.mock("@/lib/db/memgraph", () => ({
   runWrite: (...args: unknown[]) => mockRunWrite(...args),
 }));
 
-jest.mock("@/lib/embeddings/openai", () => ({
+jest.mock("@/lib/embeddings/intelli", () => ({
   embed: (...args: unknown[]) => mockEmbed(...args),
 }));
 
@@ -46,12 +46,12 @@ jest.mock("@/lib/ai/client", () => ({
   getLLMClient: () => ({ chat: { completions: { create: mockCreate } } }),
 }));
 
-// Mocked transitively — searchEntities imports these but our tests don't exercise them
+// Mocked transitively â€” searchEntities imports these but our tests don't exercise them
 jest.mock("@/lib/search/hybrid");
 jest.mock("@/lib/memory/write");
 
 // -----------------------------------------------------------------------
-// Imports (real implementations — they use the mocked DB/LLM/embed above)
+// Imports (real implementations â€” they use the mocked DB/LLM/embed above)
 // -----------------------------------------------------------------------
 import {
   serializeMetadata,
@@ -68,7 +68,7 @@ import { searchEntities } from "@/lib/mcp/entities";
 // -----------------------------------------------------------------------
 beforeEach(() => {
   jest.clearAllMocks();
-  // Default: embed fails → semantic dedup skipped (resolveEntity falls through to CREATE)
+  // Default: embed fails â†’ semantic dedup skipped (resolveEntity falls through to CREATE)
   mockEmbed.mockRejectedValue(new Error("no embed in test"));
 });
 
@@ -82,34 +82,34 @@ describe("serializeMetadata", () => {
       .toBe('{"ticker":"AAPL","sector":"Technology"}');
   });
 
-  it("META_SERIALIZE_02: undefined → '{}'", () => {
+  it("META_SERIALIZE_02: undefined â†’ '{}'", () => {
     expect(serializeMetadata(undefined)).toBe("{}");
   });
 
-  it("META_SERIALIZE_03: empty object → '{}'", () => {
+  it("META_SERIALIZE_03: empty object â†’ '{}'", () => {
     expect(serializeMetadata({})).toBe("{}");
   });
 });
 
 describe("parseMetadata", () => {
-  it("META_PARSE_01: valid JSON string → object", () => {
+  it("META_PARSE_01: valid JSON string â†’ object", () => {
     expect(parseMetadata('{"dosage":"50mg","frequency":"daily"}'))
       .toEqual({ dosage: "50mg", frequency: "daily" });
   });
 
-  it("META_PARSE_02: null → empty object", () => {
+  it("META_PARSE_02: null â†’ empty object", () => {
     expect(parseMetadata(null)).toEqual({});
   });
 
-  it("META_PARSE_03: invalid JSON → empty object", () => {
+  it("META_PARSE_03: invalid JSON â†’ empty object", () => {
     expect(parseMetadata("not-json")).toEqual({});
   });
 
-  it("META_PARSE_04: JSON array → empty object (arrays rejected)", () => {
+  it("META_PARSE_04: JSON array â†’ empty object (arrays rejected)", () => {
     expect(parseMetadata("[1,2,3]")).toEqual({});
   });
 
-  it("META_PARSE_05: undefined → empty object", () => {
+  it("META_PARSE_05: undefined â†’ empty object", () => {
     expect(parseMetadata(undefined)).toEqual({});
   });
 });
@@ -131,17 +131,17 @@ describe("mergeMetadata", () => {
     expect(result).toEqual({ ticker: "AAPL", sector: "Tech", marketCap: "3T" });
   });
 
-  it("META_MERGE_03: undefined incoming → existing unchanged", () => {
+  it("META_MERGE_03: undefined incoming â†’ existing unchanged", () => {
     const existing = { language: "TypeScript", version: "5.0" };
     expect(mergeMetadata(existing, undefined)).toEqual(existing);
   });
 
-  it("META_MERGE_04: empty incoming → existing unchanged", () => {
+  it("META_MERGE_04: empty incoming â†’ existing unchanged", () => {
     const existing = { role: "Senior Engineer" };
     expect(mergeMetadata(existing, {})).toEqual(existing);
   });
 
-  it("META_MERGE_05: both empty → empty object", () => {
+  it("META_MERGE_05: both empty â†’ empty object", () => {
     expect(mergeMetadata({}, {})).toEqual({});
   });
 });
@@ -150,7 +150,7 @@ describe("mergeMetadata", () => {
 // 2. EXTRACTION (tests metadata normalization via public API)
 // =======================================================================
 
-describe("extractEntitiesAndRelationships — metadata normalization", () => {
+describe("extractEntitiesAndRelationships â€” metadata normalization", () => {
   it("META_EXTRACT_01: entity metadata extracted and preserved", async () => {
     mockCreate.mockResolvedValueOnce({
       choices: [{
@@ -214,7 +214,7 @@ describe("extractEntitiesAndRelationships — metadata normalization", () => {
     expect(result.entities[0].metadata).toBeUndefined();
   });
 
-  it("META_EXTRACT_04: missing metadata → field omitted", async () => {
+  it("META_EXTRACT_04: missing metadata â†’ field omitted", async () => {
     mockCreate.mockResolvedValueOnce({
       choices: [{
         message: {
@@ -234,16 +234,16 @@ describe("extractEntitiesAndRelationships — metadata normalization", () => {
 });
 
 // =======================================================================
-// 3. RESOLVE — metadata on entity creation and updates
+// 3. RESOLVE â€” metadata on entity creation and updates
 // =======================================================================
 
-describe("resolveEntity — metadata", () => {
+describe("resolveEntity â€” metadata", () => {
   it("META_RESOLVE_CREATE_01: new entity stores metadata as JSON string", async () => {
     // User MERGE
     mockRunWrite.mockResolvedValueOnce([]);
-    // normalizedName lookup → not found
+    // normalizedName lookup â†’ not found
     mockRunRead.mockResolvedValueOnce([]);
-    // semantic dedup fails (embed rejected by default) → falls through to CREATE
+    // semantic dedup fails (embed rejected by default) â†’ falls through to CREATE
     // MERGE create
     mockRunWrite.mockResolvedValueOnce([{ entityId: "new-entity-id" }]);
 
@@ -268,7 +268,7 @@ describe("resolveEntity — metadata", () => {
   it("META_RESOLVE_UPDATE_01: existing entity merges metadata (shallow merge)", async () => {
     // User MERGE
     mockRunWrite.mockResolvedValueOnce([]);
-    // normalizedName lookup → found
+    // normalizedName lookup â†’ found
     mockRunRead.mockResolvedValueOnce([
       { id: "existing-entity", name: "Aspirin", type: "MEDICATION", description: "Pain reliever" },
     ]);
@@ -298,10 +298,10 @@ describe("resolveEntity — metadata", () => {
     expect(mergedMeta.frequency).toBe("daily"); // new key added
   });
 
-  it("META_RESOLVE_UPDATE_02: no incoming metadata → entity metadata untouched", async () => {
+  it("META_RESOLVE_UPDATE_02: no incoming metadata â†’ entity metadata untouched", async () => {
     // User MERGE
     mockRunWrite.mockResolvedValueOnce([]);
-    // normalizedName lookup → found (longer desc — no upgrade)
+    // normalizedName lookup â†’ found (longer desc â€” no upgrade)
     mockRunRead.mockResolvedValueOnce([
       { id: "existing-entity", name: "Aspirin", type: "MEDICATION", description: "Pain reliever and anti-inflammatory" },
     ]);
@@ -310,21 +310,21 @@ describe("resolveEntity — metadata", () => {
       {
         name: "Aspirin",
         type: "MEDICATION",
-        description: "Pain reliever", // shorter — no desc upgrade
+        description: "Pain reliever", // shorter â€” no desc upgrade
         // no metadata
       },
       "user-1"
     );
 
     expect(entityId).toBe("existing-entity");
-    // No update write — neither type, desc, nor metadata changed
+    // No update write â€” neither type, desc, nor metadata changed
     expect(mockRunWrite).toHaveBeenCalledTimes(1); // only User MERGE
   });
 
   it("META_RESOLVE_UPDATE_03: only metadata change triggers update (no type/desc upgrade)", async () => {
     // User MERGE
     mockRunWrite.mockResolvedValueOnce([]);
-    // normalizedName lookup → found
+    // normalizedName lookup â†’ found
     mockRunRead.mockResolvedValueOnce([
       { id: "existing-entity", name: "Tesla", type: "ORGANIZATION", description: "Electric car company" },
     ]);
@@ -337,7 +337,7 @@ describe("resolveEntity — metadata", () => {
       {
         name: "Tesla",
         type: "ORGANIZATION",
-        description: "Electric car", // shorter — no desc upgrade
+        description: "Electric car", // shorter â€” no desc upgrade
         metadata: { ticker: "TSLA", sector: "Automotive" },
       },
       "user-1"
@@ -356,10 +356,10 @@ describe("resolveEntity — metadata", () => {
 });
 
 // =======================================================================
-// 4. RELATE — metadata on [:RELATED_TO] edges
+// 4. RELATE â€” metadata on [:RELATED_TO] edges
 // =======================================================================
 
-describe("linkEntities — metadata", () => {
+describe("linkEntities â€” metadata", () => {
   beforeEach(() => {
     mockRunRead.mockReset();
     mockRunWrite.mockReset();
@@ -406,7 +406,7 @@ describe("linkEntities — metadata", () => {
     expect(mergedMeta.role).toBe("Senior Engineer"); // new key
   });
 
-  it("META_RELATE_03: no metadata → edge stored with '{}'", async () => {
+  it("META_RELATE_03: no metadata â†’ edge stored with '{}'", async () => {
     mockRunRead.mockResolvedValueOnce([]); // no existing edge
     mockRunWrite.mockResolvedValue([]);
 
@@ -418,10 +418,10 @@ describe("linkEntities — metadata", () => {
 });
 
 // =======================================================================
-// 5. SEARCH — metadata in entity profiles
+// 5. SEARCH â€” metadata in entity profiles
 // =======================================================================
 
-describe("searchEntities — metadata", () => {
+describe("searchEntities â€” metadata", () => {
   beforeEach(() => {
     mockRunRead.mockReset();
     mockRunWrite.mockReset();
@@ -467,7 +467,7 @@ describe("searchEntities — metadata", () => {
     });
   });
 
-  it("META_SEARCH_03: missing metadata → empty object in profile", async () => {
+  it("META_SEARCH_03: missing metadata â†’ empty object in profile", async () => {
     mockRunRead
       .mockResolvedValueOnce([
         { id: "e1", name: "Alice", type: "PERSON", description: null, memoryCount: 1 },

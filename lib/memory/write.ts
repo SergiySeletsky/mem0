@@ -1,13 +1,13 @@
-/**
- * Memory write pipeline — Spec 00
+﻿/**
+ * Memory write pipeline â€” Spec 00
  *
  * Owns the full write path; replaces mem0ai/oss Memory.add() / Memory.update() /
  * Memory.delete().
  *
  * Pipeline for addMemory():
  *  1. Embed the text via OpenAI
- *  2. (Spec 03) Deduplication check — placeholder, always adds for now
- *  3. (Spec 05) Context-window injection — placeholder for now
+ *  2. (Spec 03) Deduplication check â€” placeholder, always adds for now
+ *  3. (Spec 05) Context-window injection â€” placeholder for now
  *  4. Write Memory node to Memgraph with embedding
  *  5. Create graph edges: (User)-[:HAS_MEMORY]->(m), (m)-[:CREATED_BY]->(App)
  *  6. (async, later) Categorize via LLM
@@ -16,10 +16,9 @@
 
 import { generateId } from "@/lib/id";
 import { runWrite, runRead } from "@/lib/db/memgraph";
-import { embed } from "@/lib/embeddings/openai";
+import { embed } from "@/lib/embeddings/intelli";
 import { getRecentMemories, buildContextPrefix } from "./context";
 import { getContextWindowConfig } from "@/lib/config/helpers";
-import { categorizeMemory } from "./categorize";
 import { addHistory } from "./history";
 
 // ---------------------------------------------------------------------------
@@ -66,11 +65,11 @@ export async function addMemory(
   text: string,
   opts: AddMemoryOptions
 ): Promise<string> {
-  const { userId, appName, metadata, tags, suppressAutoCategories } = opts;
+  const { userId, appName, metadata, tags } = opts;
   const id = generateId();
   const now = new Date().toISOString();
 
-  // Spec 05: Context window — enrich embedding with recent user memories
+  // Spec 05: Context window â€” enrich embedding with recent user memories
   // The stored content is always the original text; context only affects embedding.
   let embeddingText = text;
   const ctxConfig = await getContextWindowConfig();
@@ -123,13 +122,11 @@ export async function addMemory(
     }
   );
 
-  // Async categorization — fire-and-forget, never blocks response
-  // MCP-CAT-SUPPRESS: skip when caller provides explicit categories and opts out of auto-categorization
-  if (!suppressAutoCategories) {
-    categorizeMemory(id, text).catch((e) => console.warn("[categorize]", e));
-  }
+  // Note: categorization is handled by processEntityExtraction() worker (Opt 2 â€” fold
+  // categories into extraction). suppressAutoCategories is preserved in AddMemoryOptions
+  // for API backward compatibility and is forwarded to the worker by callers.
 
-  // Async audit trail — fire-and-forget
+  // Async audit trail â€” fire-and-forget
   addHistory(id, null, text, "ADD").catch((e) => console.warn("[history]", e));
 
   return id;
@@ -140,7 +137,7 @@ export async function addMemory(
 // ---------------------------------------------------------------------------
 
 /**
- * @deprecated Use supersedeMemory() instead — in-place updates violate Spec 01
+ * @deprecated Use supersedeMemory() instead â€” in-place updates violate Spec 01
  * bi-temporal model. Kept only for backward-compatible test assertions.
  * All HTTP routes have been migrated to supersedeMemory() (see PUT /memories/:id).
  */
@@ -211,7 +208,7 @@ export async function supersedeMemory(
 
   // WRITE-SUPERSEDE-NOT-ATOMIC fix: All steps in a single Cypher query.
   // Invalidate old + create new + HAS_MEMORY + SUPERSEDES + optional App attach.
-  // Anchored to User (Spec 09 — namespace isolation).
+  // Anchored to User (Spec 09 â€” namespace isolation).
   await runWrite(
     `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(old:Memory {id: $oldId})
      SET old.invalidAt = $now, old.updatedAt = $now
@@ -240,10 +237,9 @@ export async function supersedeMemory(
     }
   );
 
-  // Async categorization of the new node — fire-and-forget
-  categorizeMemory(newId, newContent).catch((e) => console.warn("[categorize]", e));
+  // Note: categorization is handled by processEntityExtraction() worker (Opt 2).
 
-  // Async audit trail — fire-and-forget (records old → new content change)
+  // Async audit trail â€” fire-and-forget (records old â†’ new content change)
   addHistory(newId, null, newContent, "SUPERSEDE").catch((e) => console.warn("[history]", e));
 
   return newId;
@@ -269,7 +265,7 @@ export async function deleteMemory(
   );
   const deleted = rows.length > 0;
 
-  // Async audit trail — fire-and-forget
+  // Async audit trail â€” fire-and-forget
   if (deleted) {
     addHistory(memoryId, null, null, "DELETE").catch((e) => console.warn("[history]", e));
   }

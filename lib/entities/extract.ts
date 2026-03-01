@@ -32,6 +32,8 @@ export interface ExtractedRelationship {
 export interface ExtractionResult {
   entities: ExtractedEntity[];
   relationships: ExtractedRelationship[];
+  /** 1-3 category labels extracted by the LLM alongside entities. Present when the model returns them. */
+  categories?: string[];
 }
 
 export interface ExtractionOptions {
@@ -81,6 +83,27 @@ function normalizeExtractedRelationships(input: unknown): ExtractedRelationship[
       ? maybe.metadata as Record<string, unknown>
       : undefined;
     result.push({ source, target, type, description, ...(weight !== undefined ? { weight } : {}), ...(metadata ? { metadata } : {}) });
+  }
+  return result;
+}
+
+const MAX_CATEGORY_LENGTH = 50;
+const MAX_CATEGORIES = 3;
+
+/** Normalize and sanitize LLM-returned category labels. */
+function normalizeExtractedCategories(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const c of input) {
+    if (typeof c !== "string") continue;
+    const trimmed = c.trim();
+    if (!trimmed || trimmed.length > MAX_CATEGORY_LENGTH) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+    if (result.length >= MAX_CATEGORIES) break;
   }
   return result;
 }
@@ -146,6 +169,7 @@ export async function extractEntitiesAndRelationships(
     const parsed = JSON.parse(raw);
     const entities = normalizeExtractedEntities(parsed.entities);
     const relationships = normalizeExtractedRelationships(parsed.relationships);
+    const categories = normalizeExtractedCategories(parsed.categories);
 
     // --- Gleaning passes (GraphRAG-inspired) ---
     const maxGleanings = getMaxGleanings();
@@ -203,7 +227,7 @@ export async function extractEntitiesAndRelationships(
       }
     }
 
-    return { entities, relationships };
+    return { entities, relationships, categories };
   } catch (e) {
     console.warn("[entities/extract] failed:", e);
     return { entities: [], relationships: [] };

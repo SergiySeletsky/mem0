@@ -1,4 +1,4 @@
-/**
+﻿/**
  * BASELINE TESTS -- Spec 02 pre-hybrid-search
  *
  * Documents the current search behaviour BEFORE and AFTER implementing
@@ -35,7 +35,7 @@ jest.mock("neo4j-driver", () => ({
 }));
 
 // Embed mock
-jest.mock("@/lib/embeddings/openai", () => ({
+jest.mock("@/lib/embeddings/intelli", () => ({
   embed: jest.fn().mockResolvedValue(Array(1536).fill(0.1)),
 }));
 
@@ -57,7 +57,7 @@ describe("BASELINE: Hybrid Search (pre-Spec 02)", () => {
         types: { Node: class {}, Relationship: class {} },
       },
     }));
-    jest.mock("@/lib/embeddings/openai", () => ({
+    jest.mock("@/lib/embeddings/intelli", () => ({
       embed: jest.fn().mockResolvedValue(Array(1536).fill(0.1)),
     }));
   });

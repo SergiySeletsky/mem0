@@ -20,7 +20,7 @@ function getClient(): AzureOpenAI {
     _client = new AzureOpenAI({
       apiKey: key,
       endpoint,
-      deployment: process.env.EMBEDDING_AZURE_DEPLOYMENT ?? "text-embedding-3-small",
+      deployment: process.env.EMBEDDING_AZURE_DEPLOYMENT ?? "text-embedding-3-large",
       apiVersion: process.env.EMBEDDING_AZURE_API_VERSION ?? "2024-02-01",
     });
   }
@@ -28,9 +28,9 @@ function getClient(): AzureOpenAI {
 }
 
 export const EMBED_MODEL =
-  process.env.EMBEDDING_AZURE_DEPLOYMENT ?? "text-embedding-3-small";
+  process.env.EMBEDDING_AZURE_DEPLOYMENT ?? "text-embedding-3-large";
 
-export const EMBED_DIM = parseInt(process.env.EMBEDDING_DIMS ?? "1536", 10);
+export const EMBED_DIM = parseInt(process.env.EMBEDDING_DIMS ?? "1024", 10);
 
 export async function embed(text: string): Promise<number[]> {
   const response = await getClient().embeddings.create({

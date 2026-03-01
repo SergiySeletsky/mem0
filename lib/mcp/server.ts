@@ -38,6 +38,7 @@ import type { HybridSearchResult } from "@/lib/search/hybrid";
 import { traverseEntityGraph } from "@/lib/search/graph-traversal";
 import type { GraphTraversalResult } from "@/lib/search/graph-traversal";
 import { buildDateFields } from "@/lib/mcp/dates";
+import { embed } from "@/lib/embeddings/intelli";
 
 /**
  * Create a new McpServer instance with the 2 memory tools registered.
@@ -253,7 +254,9 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
                 ).catch((e: unknown) => console.warn("[explicit categories]", e));
               }
 
-              prevExtractionPromise = processEntityExtraction(id)
+              prevExtractionPromise = processEntityExtraction(id, {
+                suppressCategories: suppressAutoCategories ?? (explicitCategories != null && explicitCategories.length > 0),
+              })
                 .catch((e: unknown) => console.warn("[entity worker]", e));
               batchSeenTexts.add(normalizedText);
               results.push({ id, memory: text, event: "SUPERSEDE" });
@@ -309,7 +312,9 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
             }
 
             // Spec 04: Async entity extraction -- tracked so next iteration can drain it
-            prevExtractionPromise = processEntityExtraction(id)
+            prevExtractionPromise = processEntityExtraction(id, {
+              suppressCategories: suppressAutoCategories ?? (explicitCategories != null && explicitCategories.length > 0),
+            })
               .catch((e: unknown) => console.warn("[entity worker]", e));
 
             // MCP-BATCH-DEDUP: mark this text as seen for intra-batch dedup
@@ -504,14 +509,22 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         // GRAPH-TRAVERSAL: Run graph traversal in parallel with hybrid search.
         // Graph traversal finds memories through entity metadata and relationships
         // (open ontology) — complements keyword/vector search on memory content.
+        //
+        // SHARED EMBEDDING: Embed the query once here, pass to both hybridSearch
+        // and traverseEntityGraph so neither makes a redundant embed() call.
+        // traverseEntityGraph uses it for vector-based entity seeding (no LLM call).
+        let queryVec: number[] | undefined;
+        try { queryVec = await embed(query!); } catch { /* fallback: each arm embeds independently */ }
+
         const [hybridResults, graphResults] = await Promise.all([
           hybridSearch(query!, {
             userId,
             topK: fetchLimit,
             mode: "hybrid",
+            queryVector: queryVec,
             ...(tag ? { candidateSize: fetchLimit } : {}),
           }),
-          traverseEntityGraph(query!, userId, { limit: fetchLimit }).catch(() => [] as GraphTraversalResult[]),
+          traverseEntityGraph(query!, userId, { limit: fetchLimit, queryVector: queryVec }).catch(() => [] as GraphTraversalResult[]),
         ]);
 
         // Merge: inject graph-discovered memories not found by hybrid search.

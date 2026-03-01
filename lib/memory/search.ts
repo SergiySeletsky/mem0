@@ -1,17 +1,17 @@
-/**
- * Memory search — Spec 00
+﻿/**
+ * Memory search â€” Spec 00
  *
- * Core vector search pipeline — replaces mem0ai/oss Memory.search().
+ * Core vector search pipeline â€” replaces mem0ai/oss Memory.search().
  * (Hybrid BM25 + RRF is layered on in Spec 02.)
  *
  * Spec 00 search path:
  *  1. Embed query via OpenAI
- *  2. CALL vector_search.search("memory_vectors", K, embedding) — user-scoped
+ *  2. CALL vector_search.search("memory_vectors", K, embedding) â€” user-scoped
  *  3. Return matches as MemoryNode[]
  */
 
 import { runRead } from "@/lib/db/memgraph";
-import { embed } from "@/lib/embeddings/openai";
+import { embed } from "@/lib/embeddings/intelli";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -109,7 +109,7 @@ export async function searchMemories(
 }
 
 // ---------------------------------------------------------------------------
-// List memories (no vector search — filter + pagination)
+// List memories (no vector search â€” filter + pagination)
 // ---------------------------------------------------------------------------
 
 /**

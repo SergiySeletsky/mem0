@@ -41,9 +41,13 @@ For each relationship between entities, provide:
   Examples: {"since": "2024-01", "role": "Senior Engineer"}, {"dosage": "500mg", "frequency": "twice daily"}.
   Omit metadata entirely if no structured attributes are stated.
 
+Also classify this memory into 1-3 short category labels using capitalized words.
+Examples: Personal, Work, Health, Finance, Travel, Education, Entertainment, Food, Technology, Sports, Social, Shopping, Family, Goals, Preferences.
+You may use any well-formed category not listed above if it better describes the memory.
+
 Return ONLY valid JSON:
-{"entities": [{"name": "...", "type": "...", "description": "...", "metadata": {...}}], "relationships": [{"source": "...", "target": "...", "type": "...", "description": "...", "weight": 0.8, "metadata": {...}}]}
-If no entities found, return {"entities": [], "relationships": []}`;
+{"entities": [{"name": "...", "type": "...", "description": "...", "metadata": {...}}], "relationships": [{"source": "...", "target": "...", "type": "...", "description": "...", "weight": 0.8, "metadata": {...}}], "categories": ["Category1", "Category2"]}
+If no entities found, return {"entities": [], "relationships": [], "categories": []}`;
 
 // ---------------------------------------------------------------------------
 // Gleaning prompt — used for multi-pass extraction

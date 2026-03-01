@@ -1,16 +1,16 @@
-export {};
+﻿export {};
 
 /**
- * Unit tests for lib/memory/bulk.ts — Spec 06
+ * Unit tests for lib/memory/bulk.ts â€” Spec 06
  *
- * BULK_01 — 5 unique memories: embedBatch called once, all 5 added
- * BULK_02 — exact duplicate within batch: second occurrence skipped
- * BULK_03 — dedupEnabled=false: checkDeduplication not called
- * BULK_04 — one item throws during embed: partial failure reported
- * BULK_05 — valid_at forwarded to Memory node in UNWIND transaction
+ * BULK_01 â€” 5 unique memories: embedBatch called once, all 5 added
+ * BULK_02 â€” exact duplicate within batch: second occurrence skipped
+ * BULK_03 â€” dedupEnabled=false: checkDeduplication not called
+ * BULK_04 â€” one item throws during embed: partial failure reported
+ * BULK_05 â€” valid_at forwarded to Memory node in UNWIND transaction
  */
 
-jest.mock("@/lib/embeddings/openai", () => ({
+jest.mock("@/lib/embeddings/intelli", () => ({
   embedBatch: jest.fn(),
 }));
 jest.mock("@/lib/db/memgraph", () => ({
@@ -24,7 +24,7 @@ jest.mock("@/lib/entities/worker", () => ({
   processEntityExtraction: jest.fn(),
 }));
 
-import { embedBatch } from "@/lib/embeddings/openai";
+import { embedBatch } from "@/lib/embeddings/intelli";
 import { runWrite } from "@/lib/db/memgraph";
 import { checkDeduplication } from "@/lib/dedup";
 import { processEntityExtraction } from "@/lib/entities/worker";
@@ -48,7 +48,7 @@ beforeEach(() => {
 });
 
 describe("bulkAddMemories", () => {
-  test("BULK_01: 5 unique memories — embedBatch called once, all 5 results have status=added", async () => {
+  test("BULK_01: 5 unique memories â€” embedBatch called once, all 5 results have status=added", async () => {
     const items = [
       { text: "memory one" },
       { text: "memory two" },
@@ -68,7 +68,7 @@ describe("bulkAddMemories", () => {
     expect(mockRunWrite).toHaveBeenCalledTimes(2);
   });
 
-  test("BULK_02: exact duplicate in batch — second occurrence has status=skipped_duplicate", async () => {
+  test("BULK_02: exact duplicate in batch â€” second occurrence has status=skipped_duplicate", async () => {
     const items = [
       { text: "same memory text" },
       { text: "different memory" },
@@ -85,7 +85,7 @@ describe("bulkAddMemories", () => {
     expect(mockEmbedBatch.mock.calls[0][0]).toHaveLength(2);
   });
 
-  test("BULK_03: dedupEnabled=false — checkDeduplication never called, all items passed through", async () => {
+  test("BULK_03: dedupEnabled=false â€” checkDeduplication never called, all items passed through", async () => {
     const items = [{ text: "alpha" }, { text: "beta" }, { text: "gamma" }];
 
     const results = await bulkAddMemories(items, {
@@ -97,7 +97,7 @@ describe("bulkAddMemories", () => {
     expect(results.every((r) => r.status === "added")).toBe(true);
   });
 
-  test("BULK_04: one item flagged as cross-store duplicate — skipped, others added", async () => {
+  test("BULK_04: one item flagged as cross-store duplicate â€” skipped, others added", async () => {
     const items = [
       { text: "unique memory A" },
       { text: "near duplicate of stored" },
@@ -119,7 +119,7 @@ describe("bulkAddMemories", () => {
     expect(mockEmbedBatch.mock.calls[0][0]).toHaveLength(2);
   });
 
-  test("BULK_05: valid_at forwarded — UNWIND query includes validAt field", async () => {
+  test("BULK_05: valid_at forwarded â€” UNWIND query includes validAt field", async () => {
     const validAt = "2023-01-15T00:00:00Z";
     const items = [{ text: "historical memory", valid_at: validAt }];
 

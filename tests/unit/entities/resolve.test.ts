@@ -1,6 +1,6 @@
-export {};
+﻿export {};
 /**
- * Unit tests — resolveEntity (lib/entities/resolve.ts)
+ * Unit tests â€” resolveEntity (lib/entities/resolve.ts)
  *
  * After the atomicity + read-session fix:
  *  - Step 2 (normalizedName lookup) now uses runRead (not runWrite)
@@ -8,19 +8,19 @@ export {};
  *
  * New call pattern for "create new PERSON entity":
  *   runWrite[0]  User MERGE
- *   runRead[0]   normalizedName exact lookup  → empty
- *   runRead[1]   alias lookup (PERSON only)   → empty
+ *   runRead[0]   normalizedName exact lookup  â†’ empty
+ *   runRead[1]   alias lookup (PERSON only)   â†’ empty
  *   runWrite[1]  MERGE (u)-[:HAS_ENTITY]->(e:Entity {normalizedName, userId}) ON CREATE SET ...
  *
  * RESOLVE_01: First call creates a new Entity, returns an id
  * RESOLVE_02: Second call with same name returns the SAME id (normalizedName dedup)
- * RESOLVE_03: Same name but different type → SAME entity (type dedup), upgrades type if more specific
+ * RESOLVE_03: Same name but different type â†’ SAME entity (type dedup), upgrades type if more specific
  * RESOLVE_04: Longer description on re-resolve updates the description
  * RESOLVE_08-11: Name-alias resolution for PERSON entities (Eval v4 Finding 2)
- * RESOLVE_12: normalizedName dedup — "Order Service" == "OrderService" (whitespace stripped)
- * RESOLVE_13: Semantic dedup — embedding match + LLM confirms merge
- * RESOLVE_14: Semantic dedup — LLM rejects merge → creates new entity
- * RESOLVE_15: Semantic dedup — embed fails → graceful fallback → creates new entity
+ * RESOLVE_12: normalizedName dedup â€” "Order Service" == "OrderService" (whitespace stripped)
+ * RESOLVE_13: Semantic dedup â€” embedding match + LLM confirms merge
+ * RESOLVE_14: Semantic dedup â€” LLM rejects merge â†’ creates new entity
+ * RESOLVE_15: Semantic dedup â€” embed fails â†’ graceful fallback â†’ creates new entity
  * RESOLVE_16: Domain-specific type "SERVICE" upgrades "CONCEPT" (open ontology)
  * RESOLVE_ATOMIC: entity creation is a single User-anchored write (atomicity fix)
  * RESOLVE_READ_ONLY: Step 2 uses read session (runRead), not write session
@@ -31,8 +31,8 @@ import { resolveEntity } from "@/lib/entities/resolve";
 jest.mock("@/lib/db/memgraph", () => ({ runRead: jest.fn(), runWrite: jest.fn() }));
 import { runRead, runWrite } from "@/lib/db/memgraph";
 
-jest.mock("@/lib/embeddings/openai", () => ({ embed: jest.fn() }));
-import { embed } from "@/lib/embeddings/openai";
+jest.mock("@/lib/embeddings/intelli", () => ({ embed: jest.fn() }));
+import { embed } from "@/lib/embeddings/intelli";
 
 jest.mock("@/lib/ai/client", () => ({ getLLMClient: jest.fn() }));
 import { getLLMClient } from "@/lib/ai/client";
@@ -44,7 +44,7 @@ const mockGetLLMClient = getLLMClient as jest.MockedFunction<typeof getLLMClient
 
 beforeEach(() => {
   jest.clearAllMocks();
-  // Default: embed fails → findEntityBySemantic returns null (no semantic dedup side-effects)
+  // Default: embed fails â†’ findEntityBySemantic returns null (no semantic dedup side-effects)
   mockEmbed.mockRejectedValue(new Error("No API key in tests"));
 });
 
@@ -52,15 +52,15 @@ describe("resolveEntity", () => {
   it("RESOLVE_01: creates a new entity and returns an id string", async () => {
     // New flow for PERSON entity:
     //   runWrite[0] ensure User (MERGE u:User)
-    //   runRead[0]  normalizedName exact lookup → empty
-    //   runRead[1]  alias lookup (PERSON only)  → empty
+    //   runRead[0]  normalizedName exact lookup â†’ empty
+    //   runRead[1]  alias lookup (PERSON only)  â†’ empty
     //   runWrite[1] atomic CREATE Entity + CREATE HAS_ENTITY
     mockRunWrite
       .mockResolvedValueOnce([{}])   // User MERGE
       .mockResolvedValueOnce([{}]);  // atomic CREATE + HAS_ENTITY
     mockRunRead
-      .mockResolvedValueOnce([])     // normalizedName exact lookup → no match
-      .mockResolvedValueOnce([]);    // alias lookup → no match
+      .mockResolvedValueOnce([])     // normalizedName exact lookup â†’ no match
+      .mockResolvedValueOnce([]);    // alias lookup â†’ no match
 
     const id = await resolveEntity(
       { name: "Alice", type: "PERSON", description: "A colleague" },
@@ -71,29 +71,29 @@ describe("resolveEntity", () => {
     expect(mockRunWrite).toHaveBeenCalledTimes(2);
     expect(mockRunRead).toHaveBeenCalledTimes(2);
 
-    // runRead[0] is the exact lookup — uses normalizedName
+    // runRead[0] is the exact lookup â€” uses normalizedName
     const lookupCypher = mockRunRead.mock.calls[0][0] as string;
     expect(lookupCypher).toContain("normalizedName");
 
-    // runWrite[1] is the atomic CREATE — creating the new entity AND the HAS_ENTITY edge
+    // runWrite[1] is the atomic CREATE â€” creating the new entity AND the HAS_ENTITY edge
     const createCypher = mockRunWrite.mock.calls[1][0] as string;
     expect(createCypher).toContain("CREATE");
     expect(createCypher).toContain(":Entity");
     expect(createCypher).toContain("HAS_ENTITY");
   });
 
-  it("RESOLVE_02: same name returns same id — case-insensitive dedup", async () => {
+  it("RESOLVE_02: same name returns same id â€” case-insensitive dedup", async () => {
     // First call: creates new entity (PERSON)
     mockRunWrite
       .mockResolvedValueOnce([{}])   // User MERGE
       .mockResolvedValueOnce([{}]);  // atomic CREATE
     mockRunRead
-      .mockResolvedValueOnce([])     // normalizedName lookup → empty
-      .mockResolvedValueOnce([]);    // alias lookup → empty
+      .mockResolvedValueOnce([])     // normalizedName lookup â†’ empty
+      .mockResolvedValueOnce([]);    // alias lookup â†’ empty
 
     const id1 = await resolveEntity({ name: "Alice", type: "PERSON", description: "A colleague" }, "user-1");
 
-    // Second call: "alice" normalizes same as "Alice" → finds existing via runRead
+    // Second call: "alice" normalizes same as "Alice" â†’ finds existing via runRead
     mockRunWrite.mockResolvedValueOnce([{}]); // User MERGE
     mockRunRead.mockResolvedValueOnce([{ id: id1, name: "Alice", type: "PERSON", description: "A colleague" }]);
 
@@ -103,16 +103,16 @@ describe("resolveEntity", () => {
     expect(id1).toBe(id2);
   });
 
-  it("RESOLVE_03: same name different type → SAME entity with type upgrade", async () => {
-    // First call: creates entity as OTHER (not PERSON → no alias lookup)
+  it("RESOLVE_03: same name different type â†’ SAME entity with type upgrade", async () => {
+    // First call: creates entity as OTHER (not PERSON â†’ no alias lookup)
     mockRunWrite
       .mockResolvedValueOnce([{}])   // User MERGE
       .mockResolvedValueOnce([{}]);  // atomic CREATE
-    mockRunRead.mockResolvedValueOnce([]); // normalizedName lookup → empty (no alias for OTHER)
+    mockRunRead.mockResolvedValueOnce([]); // normalizedName lookup â†’ empty (no alias for OTHER)
 
     const id1 = await resolveEntity({ name: "Alice", type: "OTHER", description: "" }, "user-1");
 
-    // Second call: same name, PERSON type (more specific) → should find existing, upgrade type
+    // Second call: same name, PERSON type (more specific) â†’ should find existing, upgrade type
     mockRunWrite
       .mockResolvedValueOnce([{}])   // User MERGE
       .mockResolvedValueOnce([{}]);  // Type upgrade SET
@@ -133,12 +133,12 @@ describe("resolveEntity", () => {
       .mockResolvedValueOnce([{}])   // User MERGE
       .mockResolvedValueOnce([{}]);  // atomic CREATE
     mockRunRead
-      .mockResolvedValueOnce([])     // normalizedName lookup → empty
-      .mockResolvedValueOnce([]);    // alias lookup → empty
+      .mockResolvedValueOnce([])     // normalizedName lookup â†’ empty
+      .mockResolvedValueOnce([]);    // alias lookup â†’ empty
 
     const id1 = await resolveEntity({ name: "Alice", type: "PERSON", description: "Short" }, "user-1");
 
-    // Second call: longer description → should update (exact match → no alias)
+    // Second call: longer description â†’ should update (exact match â†’ no alias)
     mockRunWrite
       .mockResolvedValueOnce([{}])   // User MERGE
       .mockResolvedValueOnce([{}]);  // Description update SET
@@ -152,7 +152,7 @@ describe("resolveEntity", () => {
     expect(setCypher).toContain("newDesc");
   });
 
-  it("RESOLVE_05: type priority ordering — PERSON > ORGANIZATION > LOCATION > PRODUCT > CONCEPT > OTHER", async () => {
+  it("RESOLVE_05: type priority ordering â€” PERSON > ORGANIZATION > LOCATION > PRODUCT > CONCEPT > OTHER", async () => {
     const priority = ["PERSON", "ORGANIZATION", "LOCATION", "PRODUCT", "CONCEPT", "OTHER"];
     for (let i = 0; i < priority.length - 1; i++) {
       jest.clearAllMocks();
@@ -175,7 +175,7 @@ describe("resolveEntity", () => {
   });
 
   it("RESOLVE_06: lower-priority type does NOT downgrade existing", async () => {
-    // Entity is PERSON, new extraction says CONCEPT → no upgrade
+    // Entity is PERSON, new extraction says CONCEPT â†’ no upgrade
     mockRunWrite.mockResolvedValueOnce([{}]); // User MERGE
     mockRunRead.mockResolvedValueOnce([{ id: "existing-id", name: "Alice", type: "PERSON", description: "A colleague" }]);
 
@@ -204,16 +204,16 @@ describe("resolveEntity", () => {
   it("RESOLVE_08: 'Alice' matches existing 'Alice Chen' (PERSON prefix alias)", async () => {
     mockRunWrite.mockResolvedValueOnce([{}]); // User MERGE
     mockRunRead
-      .mockResolvedValueOnce([])              // exact normalizedName lookup → empty
-      .mockResolvedValueOnce([{              // alias lookup → finds "Alice Chen"
+      .mockResolvedValueOnce([])              // exact normalizedName lookup â†’ empty
+      .mockResolvedValueOnce([{              // alias lookup â†’ finds "Alice Chen"
         id: "existing-alice-chen", name: "Alice Chen", type: "PERSON", description: "Lead engineer",
       }]);
-    // No name upgrade — existing name is longer, so incoming "Alice" doesn't trigger upgrade
+    // No name upgrade â€” existing name is longer, so incoming "Alice" doesn't trigger upgrade
 
     const id = await resolveEntity({ name: "Alice", type: "PERSON", description: "" }, "user-1");
 
     expect(id).toBe("existing-alice-chen");
-    expect(mockRunWrite).toHaveBeenCalledTimes(1); // Only User MERGE — no new entity created
+    expect(mockRunWrite).toHaveBeenCalledTimes(1); // Only User MERGE â€” no new entity created
     expect(mockRunRead).toHaveBeenCalledTimes(2);  // Exact lookup + alias lookup
     const aliasCypher = mockRunRead.mock.calls[1][0] as string;
     expect(aliasCypher).toContain("STARTS WITH");
@@ -225,8 +225,8 @@ describe("resolveEntity", () => {
       .mockResolvedValueOnce([{}])   // User MERGE
       .mockResolvedValueOnce([{}]);  // name upgrade SET
     mockRunRead
-      .mockResolvedValueOnce([])     // exact normalizedName lookup → empty (no "alicechen")
-      .mockResolvedValueOnce([{     // alias lookup → finds "Alice"
+      .mockResolvedValueOnce([])     // exact normalizedName lookup â†’ empty (no "alicechen")
+      .mockResolvedValueOnce([{     // alias lookup â†’ finds "Alice"
         id: "existing-alice", name: "Alice", type: "PERSON", description: "Teammate",
       }]);
 
@@ -243,24 +243,24 @@ describe("resolveEntity", () => {
   });
 
   it("RESOLVE_10: alias matching only applies to PERSON entities", async () => {
-    // CONCEPT type → no alias lookup → goes straight to creating new entity
+    // CONCEPT type â†’ no alias lookup â†’ goes straight to creating new entity
     mockRunWrite
       .mockResolvedValueOnce([{}])   // User MERGE
       .mockResolvedValueOnce([{}]);  // atomic CREATE + HAS_ENTITY
-    mockRunRead.mockResolvedValueOnce([]); // exact lookup → empty
+    mockRunRead.mockResolvedValueOnce([]); // exact lookup â†’ empty
 
     const id = await resolveEntity({ name: "React", type: "CONCEPT", description: "UI library" }, "user-1");
 
     expect(typeof id).toBe("string");
     expect(mockRunWrite).toHaveBeenCalledTimes(2);
-    // NO second runRead — alias lookup only fires for PERSON
+    // NO second runRead â€” alias lookup only fires for PERSON
     expect(mockRunRead).toHaveBeenCalledTimes(1);
     const createCypher = mockRunWrite.mock.calls[1][0] as string;
     expect(createCypher).toContain("CREATE");
   });
 
   it("RESOLVE_11: alias match only fires when exact match fails", async () => {
-    // Exact match succeeds → alias resolution is NOT attempted
+    // Exact match succeeds â†’ alias resolution is NOT attempted
     mockRunWrite.mockResolvedValueOnce([{}]); // User MERGE
     mockRunRead.mockResolvedValueOnce([{
       id: "exact-id", name: "Alice Chen", type: "PERSON", description: "",
@@ -283,13 +283,13 @@ describe("resolveEntity", () => {
     mockRunWrite
       .mockResolvedValueOnce([{}])   // User MERGE
       .mockResolvedValueOnce([{}]);  // atomic CREATE (stores normalizedName: "orderservice")
-    mockRunRead.mockResolvedValueOnce([]); // normalizedName "orderservice" lookup → empty
+    mockRunRead.mockResolvedValueOnce([]); // normalizedName "orderservice" lookup â†’ empty
 
     const id1 = await resolveEntity({ name: "OrderService", type: "SERVICE", description: "Order microservice" }, "user-1");
 
-    // Second call: "Order Service" normalizes to "orderservice" — should find existing
+    // Second call: "Order Service" normalizes to "orderservice" â€” should find existing
     mockRunWrite.mockResolvedValueOnce([{}]); // User MERGE
-    mockRunRead.mockResolvedValueOnce([{      // normalizedName "orderservice" lookup → HIT
+    mockRunRead.mockResolvedValueOnce([{      // normalizedName "orderservice" lookup â†’ HIT
       id: id1, name: "OrderService", type: "SERVICE", description: "Order microservice",
     }]);
 
@@ -310,11 +310,11 @@ describe("resolveEntity", () => {
   // Semantic dedup (RESOLVE_13, RESOLVE_14, RESOLVE_15)
   // ---------------------------------------------------------------------------
 
-  it("RESOLVE_13: semantic dedup — embedding match + LLM confirms merge → reuses existing entity", async () => {
+  it("RESOLVE_13: semantic dedup â€” embedding match + LLM confirms merge â†’ reuses existing entity", async () => {
     // Exact normalizedName lookup fails, alias skipped (CONCEPT type)
     mockRunWrite.mockResolvedValueOnce([{}]); // User MERGE
     mockRunRead
-      .mockResolvedValueOnce([])              // normalizedName lookup → empty
+      .mockResolvedValueOnce([])              // normalizedName lookup â†’ empty
       .mockResolvedValueOnce([{              // vector_search result
         id: "redis-entity-id",
         name: "Redis",
@@ -349,13 +349,13 @@ describe("resolveEntity", () => {
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
-  it("RESOLVE_14: semantic dedup — LLM rejects merge → creates new entity", async () => {
+  it("RESOLVE_14: semantic dedup â€” LLM rejects merge â†’ creates new entity", async () => {
     mockRunWrite
       .mockResolvedValueOnce([{}])   // User MERGE
       .mockResolvedValueOnce([{}]);  // atomic CREATE
     mockRunRead
-      .mockResolvedValueOnce([])     // normalizedName lookup → empty
-      .mockResolvedValueOnce([{     // vector search → candidate
+      .mockResolvedValueOnce([])     // normalizedName lookup â†’ empty
+      .mockResolvedValueOnce([{     // vector search â†’ candidate
         id: "different-entity",
         name: "Valkey",
         type: "DATABASE",
@@ -387,13 +387,13 @@ describe("resolveEntity", () => {
     expect(createCypher).toContain("CREATE");
   });
 
-  it("RESOLVE_15: semantic dedup — embed fails → graceful fallback → creates new entity", async () => {
+  it("RESOLVE_15: semantic dedup â€” embed fails â†’ graceful fallback â†’ creates new entity", async () => {
     mockRunWrite
       .mockResolvedValueOnce([{}])   // User MERGE
       .mockResolvedValueOnce([{}]);  // atomic CREATE
-    mockRunRead.mockResolvedValueOnce([]); // normalizedName lookup → empty
+    mockRunRead.mockResolvedValueOnce([]); // normalizedName lookup â†’ empty
 
-    // embed already mocked to reject in beforeEach — no override needed
+    // embed already mocked to reject in beforeEach â€” no override needed
 
     const id = await resolveEntity(
       { name: "Kafka", type: "SERVICE", description: "Message broker" },
@@ -401,7 +401,7 @@ describe("resolveEntity", () => {
     );
 
     expect(typeof id).toBe("string");
-    // 2 runWrite: MERGE + CREATE; embed failed silently → no vector search runRead
+    // 2 runWrite: MERGE + CREATE; embed failed silently â†’ no vector search runRead
     expect(mockRunWrite).toHaveBeenCalledTimes(2);
     expect(mockRunRead).toHaveBeenCalledTimes(1); // Only normalizedName lookup
     const createCypher = mockRunWrite.mock.calls[1][0] as string;
@@ -463,9 +463,9 @@ describe("resolveEntity", () => {
   it("RESOLVE_DUP_SAFE: MERGE returns existing entityId when a concurrent writer beat us (ENTITY-DUP-FIX)", async () => {
     // Simulates the race: 3-tier lookup returned empty (no existing entity),
     // but by the time our MERGE fires, another writer already created the node.
-    // Memgraph's MERGE finds it and returns the existing id — we use that id.
+    // Memgraph's MERGE finds it and returns the existing id â€” we use that id.
     // CONCEPT type: only 1 runRead (normalizedName exact lookup, no alias lookup).
-    mockRunRead.mockResolvedValueOnce([]);   // normalizedName exact lookup → empty
+    mockRunRead.mockResolvedValueOnce([]);   // normalizedName exact lookup â†’ empty
     mockRunWrite
       .mockResolvedValueOnce([{}])                               // User MERGE
       .mockResolvedValueOnce([{ entityId: "concurrent-id" }]);  // MERGE: concurrent writer's node returned
@@ -494,7 +494,7 @@ describe("resolveEntity", () => {
     const lookupCypher = mockRunRead.mock.calls[0][0] as string;
     expect(lookupCypher).toContain("normalizedName");
     expect(lookupCypher).toContain("MATCH");
-    // Only 1 runWrite (User MERGE) — lookup did NOT consume a write session
+    // Only 1 runWrite (User MERGE) â€” lookup did NOT consume a write session
     expect(mockRunWrite).toHaveBeenCalledTimes(1);
   });
 });

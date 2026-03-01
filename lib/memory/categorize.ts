@@ -95,3 +95,41 @@ export async function categorizeMemory(
     console.warn("[categorize] failed for memory", memoryId, e);
   }
 }
+
+/**
+ * Write pre-determined category labels to a Memory node without making an LLM call.
+ * Used by the entity extraction worker when categories are returned from the
+ * combined extraction prompt (Opt 2 — fold categories into extraction).
+ *
+ * Idempotent: MERGE ensures duplicate writes are no-ops.
+ */
+export async function applyCategories(
+  memoryId: string,
+  categories: string[]
+): Promise<void> {
+  if (!categories.length) return;
+
+  // Reuse the same sanitization logic as categorizeMemory
+  const seen = new Set<string>();
+  const valid: string[] = [];
+  for (const c of categories) {
+    if (typeof c !== "string") continue;
+    const trimmed = c.trim();
+    if (!trimmed || trimmed.length > MAX_CATEGORY_LENGTH) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    valid.push(trimmed);
+    if (valid.length >= MAX_CATEGORIES) break;
+  }
+
+  if (valid.length === 0) return;
+
+  await runWrite(
+    `MATCH (m:Memory {id: $memId})
+     UNWIND $names AS name
+     MERGE (c:Category {name: name})
+     MERGE (m)-[:HAS_CATEGORY]->(c)`,
+    { memId: memoryId, names: valid }
+  );
+}

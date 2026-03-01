@@ -1,23 +1,23 @@
-export {};
+﻿export {};
 /**
- * Unit tests — findNearDuplicates (Stage 1 vector similarity)
+ * Unit tests â€” findNearDuplicates (Stage 1 vector similarity)
  *
  * FIND_01: Returns candidates above threshold
  * FIND_02: Returns [] when no candidates above threshold
  * FIND_03: threshold=1.0 filters candidates with score < 1
- * FIND_04: runRead() throws — returns [] gracefully (fail-open)
+ * FIND_04: runRead() throws â€” returns [] gracefully (fail-open)
  */
 import { findNearDuplicates } from "@/lib/dedup/findNearDuplicates";
 
 jest.mock("@/lib/db/memgraph", () => ({
   runRead: jest.fn(),
 }));
-jest.mock("@/lib/embeddings/openai", () => ({
+jest.mock("@/lib/embeddings/intelli", () => ({
   embed: jest.fn(),
 }));
 
 import { runRead } from "@/lib/db/memgraph";
-import { embed } from "@/lib/embeddings/openai";
+import { embed } from "@/lib/embeddings/intelli";
 
 const mockRunRead = runRead as jest.MockedFunction<typeof runRead>;
 const mockEmbed = embed as jest.MockedFunction<typeof embed>;
@@ -64,7 +64,7 @@ describe("findNearDuplicates", () => {
     expect(callArgs.threshold).toBe(1.0);
   });
 
-  it("FIND_04: runRead() throws — returns [] without crashing (fail-open)", async () => {
+  it("FIND_04: runRead() throws â€” returns [] without crashing (fail-open)", async () => {
     mockRunRead.mockRejectedValue(new Error("Memgraph connection refused"));
 
     const results = await findNearDuplicates("any text", "user-1");

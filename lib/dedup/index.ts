@@ -80,7 +80,7 @@ export async function checkDeduplication(
   const _provider = (process.env.EMBEDDING_PROVIDER ?? "intelli").toLowerCase();
   const _hasAzureKey = !!process.env.EMBEDDING_AZURE_OPENAI_API_KEY;
   const isAzure = _provider === "azure" && _hasAzureKey;
-  const isIntelli = _provider === "intelli" || (_provider !== "azure" && _provider !== "nomic");
+  const isIntelli = _provider !== "azure";
   const effectiveThreshold = isAzure
     ? config.azureThreshold
     : isIntelli

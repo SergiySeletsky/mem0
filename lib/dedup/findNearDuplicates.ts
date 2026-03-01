@@ -1,16 +1,16 @@
-/**
- * lib/dedup/findNearDuplicates.ts — Stage 1 vector similarity check
+﻿/**
+ * lib/dedup/findNearDuplicates.ts â€” Stage 1 vector similarity check
  *
  * Embeds the new memory text and queries Memgraph vector_search for
- * existing memories that are semantically close (≥ threshold cosine similarity).
+ * existing memories that are semantically close (â‰¥ threshold cosine similarity).
  */
 import { runRead } from "@/lib/db/memgraph";
-import { embed } from "@/lib/embeddings/openai";
+import { embed } from "@/lib/embeddings/intelli";
 
 export interface DuplicateCandidate {
   id: string;
   content: string;
-  score: number; // cosine similarity 0–1
+  score: number; // cosine similarity 0â€“1
   tags: string[]; // memory tags for tag-aware dedup boosting
 }
 

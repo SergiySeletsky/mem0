@@ -12,11 +12,10 @@
  */
 
 import { generateId } from "@/lib/id";
-import { embedBatch } from "@/lib/embeddings/openai";
+import { embedBatch } from "@/lib/embeddings/intelli";
 import { runWrite } from "@/lib/db/memgraph";
 import { checkDeduplication } from "@/lib/dedup";
 import { processEntityExtraction } from "@/lib/entities/worker";
-import { categorizeMemory } from "@/lib/memory/categorize";
 import { Semaphore } from "@/lib/memforge/semaphore";
 
 // â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -202,11 +201,9 @@ export async function bulkAddMemories(
     };
     completed++;
     onProgress?.(completed, items.length);
+    // Categories are written inside processEntityExtraction (Opt 2 — no extra LLM call).
     processEntityExtraction(mem.id).catch((e) =>
       console.warn("[bulk entity worker]", e)
-    );
-    categorizeMemory(mem.id, items[mem.origIdx].text).catch((e) =>
-      console.warn("[bulk categorize]", e)
     );
   }
 

@@ -1,5 +1,5 @@
-/**
- * Unit tests — MCP tool handlers (2-tool architecture)
+﻿/**
+ * Unit tests â€” MCP tool handlers (2-tool architecture)
  *
  * Tests the 2 MCP tools (add_memories, search_memory) by mocking the DB layer,
  * embedding layer, pipeline modules, intent classifier, and entity functions,
@@ -8,16 +8,16 @@
  *
  * Coverage:
  *   add_memories:
- *     MCP_ADD_01:    single-string backward compat — ADD path returns {id, memory, event: "ADD"}
+ *     MCP_ADD_01:    single-string backward compat â€” ADD path returns {id, memory, event: "ADD"}
  *     MCP_ADD_02:    single-string dedup skip returns event: "SKIP_DUPLICATE"
  *     MCP_ADD_03:    single-string dedup supersede returns event: "SUPERSEDE"
  *     MCP_ADD_04:    fires entity extraction asynchronously
  *     MCP_ADD_05:    array of strings: all items processed, returns one result per item
- *     MCP_ADD_06:    array: per-item error isolation — failed item returns event "ERROR", others succeed
+ *     MCP_ADD_06:    array: per-item error isolation â€” failed item returns event "ERROR", others succeed
  *     MCP_ADD_07:    empty array returns { results: [] } immediately
  *     MCP_ADD_08:    array with mixed dedup outcomes (ADD + SKIP + SUPERSEDE)
- *     MCP_ADD_09:    INVALIDATE intent — soft-deletes matching memories
- *     MCP_ADD_10:    DELETE_ENTITY intent — removes entity from knowledge graph
+ *     MCP_ADD_09:    INVALIDATE intent â€” soft-deletes matching memories
+ *     MCP_ADD_10:    DELETE_ENTITY intent â€” removes entity from knowledge graph
  *     MCP_ADD_11:    intent classifier failure defaults to STORE (fail-open)
  *
  *   search_memory (search mode):
@@ -28,7 +28,7 @@
  *     MCP_SM_05:     entity enrichment returns entity profiles alongside results
  *     MCP_SM_06:     include_entities=false skips entity enrichment
  *
- *   search_memory (browse mode — no query):
+ *   search_memory (browse mode â€” no query):
  *     MCP_SM_BROWSE_01:  no query returns paginated shape { total, offset, limit, results }
  *     MCP_SM_BROWSE_02:  offset parameter is forwarded to SKIP clause
  *     MCP_SM_BROWSE_03:  clamps limit to max 200
@@ -40,7 +40,7 @@
 export {};
 
 // ---------------------------------------------------------------------------
-// Mocks — must come before imports
+// Mocks â€” must come before imports
 // ---------------------------------------------------------------------------
 const mockRunRead = jest.fn();
 const mockRunWrite = jest.fn();
@@ -51,7 +51,7 @@ jest.mock("@/lib/db/memgraph", () => ({
   runWrite: (...args: unknown[]) => mockRunWrite(...args),
 }));
 
-jest.mock("@/lib/embeddings/openai", () => ({
+jest.mock("@/lib/embeddings/intelli", () => ({
   embed: (...args: unknown[]) => mockEmbed(...args),
 }));
 
@@ -70,7 +70,7 @@ jest.mock("@/lib/search/hybrid", () => ({
   hybridSearch: jest.fn(),
 }));
 
-// Mock graph traversal — default to empty results so existing tests are unaffected
+// Mock graph traversal â€” default to empty results so existing tests are unaffected
 jest.mock("@/lib/search/graph-traversal", () => ({
   traverseEntityGraph: jest.fn(),
 }));
@@ -87,7 +87,7 @@ jest.mock("@/lib/entities/resolve", () => ({
   resolveEntity: jest.fn(),
 }));
 
-// Mock intent classifier — default to STORE for all existing tests
+// Mock intent classifier â€” default to STORE for all existing tests
 jest.mock("@/lib/mcp/classify", () => ({
   classifyIntent: jest.fn(),
 }));
@@ -102,7 +102,7 @@ jest.mock("@/lib/mcp/entities", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Imports — after mocks
+// Imports â€” after mocks
 // ---------------------------------------------------------------------------
 import { createMcpServer } from "@/lib/mcp/server";
 import { Client } from "@modelcontextprotocol/sdk/client";
@@ -154,7 +154,7 @@ function parseToolResult(result: { content: Array<{ type: string; text?: string 
 }
 
 // ---------------------------------------------------------------------------
-describe("MCP Tool Handlers — add_memories", () => {
+describe("MCP Tool Handlers â€” add_memories", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -168,7 +168,7 @@ describe("MCP Tool Handlers — add_memories", () => {
     mockSearchEntities.mockResolvedValue([]);
   });
 
-  it("MCP_ADD_01: single string backward compat — ADD returns {id, memory, event: 'ADD'}", async () => {
+  it("MCP_ADD_01: single string backward compat â€” ADD returns {id, memory, event: 'ADD'}", async () => {
     mockCheckDeduplication.mockResolvedValueOnce({ action: "add" } as any);
     mockAddMemory.mockResolvedValueOnce("new-mem-id");
     mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
@@ -255,8 +255,8 @@ describe("MCP Tool Handlers — add_memories", () => {
       arguments: { content: "Entity test" },
     });
 
-    // processEntityExtraction called with the new memory id
-    expect(mockProcessEntityExtraction).toHaveBeenCalledWith("ext-mem-id");
+    // processEntityExtraction called with the new memory id + suppressCategories
+    expect(mockProcessEntityExtraction).toHaveBeenCalledWith("ext-mem-id", { suppressCategories: false });
   });
 
   it("MCP_ADD_05: array of strings processes all items, returns one result each", async () => {
@@ -282,7 +282,7 @@ describe("MCP Tool Handlers — add_memories", () => {
     expect(mockProcessEntityExtraction).toHaveBeenCalledTimes(3);
   });
 
-  it("MCP_ADD_06: per-item error isolation — failed item has event 'ERROR', others succeed", async () => {
+  it("MCP_ADD_06: per-item error isolation â€” failed item has event 'ERROR', others succeed", async () => {
     mockCheckDeduplication
       .mockResolvedValueOnce({ action: "add" } as any)
       .mockRejectedValueOnce(new Error("DB timeout"))
@@ -366,7 +366,7 @@ describe("MCP Tool Handlers — add_memories", () => {
     expect(catNames).toEqual(["Technology", "Work"]);
   });
 
-  it("MCP_ADD_10: no categories param — no explicit category writes (LLM handles it)", async () => {
+  it("MCP_ADD_10: no categories param â€” no explicit category writes (LLM handles it)", async () => {
     mockCheckDeduplication.mockResolvedValueOnce({ action: "add" } as any);
     mockAddMemory.mockResolvedValueOnce("no-cat-mem-id");
     mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
@@ -388,7 +388,7 @@ describe("MCP Tool Handlers — add_memories", () => {
 });
 
 // ---------------------------------------------------------------------------
-describe("MCP Tool Handlers — search_memory", () => {
+describe("MCP Tool Handlers â€” search_memory", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -397,7 +397,7 @@ describe("MCP Tool Handlers — search_memory", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // Default: graph traversal returns empty — existing tests unaffected
+    // Default: graph traversal returns empty â€” existing tests unaffected
     mockTraverseEntityGraph.mockResolvedValue([]);
   });
 
@@ -500,7 +500,7 @@ describe("MCP Tool Handlers — search_memory", () => {
   });
 
   it("MCP_SM_06: includes confident:false when all text_rank null and low scores", async () => {
-    // Simulate irrelevant query — vector-only results with scores below 0.012 threshold
+    // Simulate irrelevant query â€” vector-only results with scores below 0.012 threshold
     mockHybridSearch.mockResolvedValueOnce([
       { id: "m1", content: "Unrelated A", rrfScore: 0.010, textRank: null, vectorRank: 5, createdAt: "2026-01-15", categories: [] },
       { id: "m2", content: "Unrelated B", rrfScore: 0.008, textRank: null, vectorRank: 8, createdAt: "2026-01-14", categories: [] },
@@ -549,8 +549,8 @@ describe("MCP Tool Handlers — search_memory", () => {
     expect(parsed.results).toHaveLength(0);
   });
 
-  it("MCP_FILTER_FETCH_01: fetches 5× limit candidates when category filter active (MCP-FILTER-02)", async () => {
-    // With limit=5 and a category filter, hybridSearch topK must be 25 (5 × 5)
+  it("MCP_FILTER_FETCH_01: fetches 5Ã— limit candidates when category filter active (MCP-FILTER-02)", async () => {
+    // With limit=5 and a category filter, hybridSearch topK must be 25 (5 Ã— 5)
     mockHybridSearch.mockResolvedValueOnce([]);
     mockRunWrite.mockResolvedValueOnce([]);
 
@@ -565,7 +565,7 @@ describe("MCP Tool Handlers — search_memory", () => {
     );
   });
 
-  it("MCP_FILTER_FETCH_02: fetches min(10×, 200) candidates when tag filter active (MCP-FILTER-02 + MCP-TAG-RECALL-02)", async () => {
+  it("MCP_FILTER_FETCH_02: fetches min(10Ã—, 200) candidates when tag filter active (MCP-FILTER-02 + MCP-TAG-RECALL-02)", async () => {
     mockHybridSearch.mockResolvedValueOnce([]);
     mockRunWrite.mockResolvedValueOnce([]);
 
@@ -574,7 +574,7 @@ describe("MCP Tool Handlers — search_memory", () => {
       arguments: { query: "tagged query", tag: "session-42", limit: 4 },
     });
 
-    // MCP-TAG-RECALL-02: tag search uses Math.max(limit*10, 200) → 200
+    // MCP-TAG-RECALL-02: tag search uses Math.max(limit*10, 200) â†’ 200
     expect(mockHybridSearch).toHaveBeenCalledWith(
       "tagged query",
       expect.objectContaining({ topK: 200 })
@@ -582,7 +582,7 @@ describe("MCP Tool Handlers — search_memory", () => {
   });
 
   it("MCP_FILTER_FETCH_03: uses exact limit as topK when no post-filters active (MCP-FILTER-02)", async () => {
-    // Without filters, fetchLimit === effectiveLimit (no 3× overhead)
+    // Without filters, fetchLimit === effectiveLimit (no 3Ã— overhead)
     mockHybridSearch.mockResolvedValueOnce([]);
     mockRunWrite.mockResolvedValueOnce([]);
 
@@ -646,7 +646,7 @@ describe("MCP Tool Handlers — search_memory", () => {
         categories: [], tags: [], appName: null,
       },
     ] as any);
-    // Graph traversal finds the same memory — should be deduplicated
+    // Graph traversal finds the same memory â€” should be deduplicated
     mockTraverseEntityGraph.mockResolvedValueOnce([
       { memoryId: "m1", hopDistance: 0, avgWeight: 1.0 },
     ]);
@@ -731,7 +731,7 @@ describe("MCP Tool Handlers — search_memory", () => {
     // Community enrichment runRead may fire, but no hydration call needed
   });
 
-  it("MCP_GRAPH_06: distance-based scoring — closer hop = higher score", async () => {
+  it("MCP_GRAPH_06: distance-based scoring â€” closer hop = higher score", async () => {
     mockHybridSearch.mockResolvedValueOnce([]);
     // Graph finds 3 memories at different hop distances
     mockTraverseEntityGraph.mockResolvedValueOnce([
@@ -766,13 +766,13 @@ describe("MCP Tool Handlers — search_memory", () => {
 
     const parsed = parseToolResult(result as any) as any;
     expect(parsed.results).toHaveLength(3);
-    // Sorted by score descending — hop 0 highest, hop 2 lowest
+    // Sorted by score descending â€” hop 0 highest, hop 2 lowest
     const hop0 = parsed.results.find((r: any) => r.id === "m-hop0");
     const hop1 = parsed.results.find((r: any) => r.id === "m-hop1");
     const hop2 = parsed.results.find((r: any) => r.id === "m-hop2");
-    // hop 0 → GRAPH_MAX_SCORE/(0+1) = 0.01, hop 1 → 0.005, hop 2 → 0.0033
+    // hop 0 â†’ GRAPH_MAX_SCORE/(0+1) = 0.01, hop 1 â†’ 0.005, hop 2 â†’ 0.0033
     // After normalization (rrfScore/0.032786, min 1.0, round to 2dp):
-    // hop 0 → 0.31, hop 1 → 0.15, hop 2 → 0.10
+    // hop 0 â†’ 0.31, hop 1 â†’ 0.15, hop 2 â†’ 0.10
     expect(hop0.relevance_score).toBeGreaterThan(hop1.relevance_score);
     expect(hop1.relevance_score).toBeGreaterThan(hop2.relevance_score);
     // All graph-only scores should be < 1.0 (below hybrid RRF range)
@@ -782,7 +782,7 @@ describe("MCP Tool Handlers — search_memory", () => {
 });
 
 // ---------------------------------------------------------------------------
-describe("MCP Tool Handlers — search_memory (browse mode)", () => {
+describe("MCP Tool Handlers â€” search_memory (browse mode)", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -802,7 +802,7 @@ describe("MCP Tool Handlers — search_memory (browse mode)", () => {
 
     const result = await client.callTool({
       name: "search_memory",
-      arguments: {},  // no query → browse mode
+      arguments: {},  // no query â†’ browse mode
     });
 
     const parsed = parseToolResult(result as any) as any;
@@ -899,7 +899,7 @@ describe("MCP Tool Handlers — search_memory (browse mode)", () => {
 
     const result = await client.callTool({
       name: "search_memory",
-      arguments: { query: "   " },  // whitespace-only → browse mode
+      arguments: { query: "   " },  // whitespace-only â†’ browse mode
     });
 
     const parsed = parseToolResult(result as any) as any;
@@ -1037,7 +1037,7 @@ describe("MCP Tool Handlers -- search_memory entity enrichment", () => {
 
     const result = await client.callTool({
       name: "search_memory",
-      // No include_entities param — default is true
+      // No include_entities param â€” default is true
       arguments: { query: "Alice" },
     });
 
@@ -1175,7 +1175,7 @@ describe("MCP add_memories -- extraction drain (Tantivy concurrency prevention)"
 // ---------------------------------------------------------------------------
 // NEW: tags support in add_memories / search_memory (Session 18 audit fix)
 // ---------------------------------------------------------------------------
-describe("MCP Tool Handlers — tags support", () => {
+describe("MCP Tool Handlers â€” tags support", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -1249,14 +1249,14 @@ describe("MCP Tool Handlers — tags support", () => {
 
     const result = await client.callTool({
       name: "search_memory",
-      arguments: { tag: "session-17" },  // no query → browse mode
+      arguments: { tag: "session-17" },  // no query â†’ browse mode
     });
 
     const parsed = parseToolResult(result as any) as any;
     expect(parsed).toHaveProperty("total", 1);
     expect(parsed.results).toHaveLength(1);
 
-    // Single combined query — params must include tag
+    // Single combined query â€” params must include tag
     const queryParams = mockRunRead.mock.calls[0][1] as Record<string, unknown>;
     expect(queryParams).toHaveProperty("tag", "session-17");
 
@@ -1265,7 +1265,7 @@ describe("MCP Tool Handlers — tags support", () => {
     expect(queryCypher).toContain("toLower($tag)");
   });
 
-  it("MCP_BROWSE_NO_UNDEF_PARAMS: browse without tag/category — no undefined keys in runRead params", async () => {
+  it("MCP_BROWSE_NO_UNDEF_PARAMS: browse without tag/category â€” no undefined keys in runRead params", async () => {
     mockRunRead
       .mockResolvedValueOnce([]);
 
@@ -1291,7 +1291,7 @@ describe("MCP Tool Handlers — tags support", () => {
 // ---------------------------------------------------------------------------
 // NEW: Global drain budget cap across entire batch (MCP-02)
 // ---------------------------------------------------------------------------
-describe("MCP add_memories — global drain budget (MCP-02)", () => {
+describe("MCP add_memories â€” global drain budget (MCP-02)", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -1310,7 +1310,7 @@ describe("MCP add_memories — global drain budget (MCP-02)", () => {
   it("MCP_ADD_DRAIN_GLOBAL_BUDGET: 5-item batch with hanging extractions completes once 12 s budget exhausted", async () => {
     jest.useFakeTimers({ advanceTimers: false });
 
-    // All 5 items: dedup → add → extraction hangs for 10 s each
+    // All 5 items: dedup â†’ add â†’ extraction hangs for 10 s each
     mockCheckDeduplication
       .mockResolvedValue({ action: "add" } as any);
     mockAddMemory
@@ -1332,14 +1332,14 @@ describe("MCP add_memories — global drain budget (MCP-02)", () => {
       arguments: { content: ["Item 1", "Item 2", "Item 3", "Item 4", "Item 5"] },
     });
 
-    // Advance timers by 15 s — this covers both the per-item 3 s caps
+    // Advance timers by 15 s â€” this covers both the per-item 3 s caps
     // AND exhausts the 12 s global budget so remaining items get 0 ms drain.
     await jest.advanceTimersByTimeAsync(15_000);
 
     const result = await callPromise;
     const parsed = parseToolResult(result as any) as any;
 
-    // All 5 items processed — global budget exhaustion must not block
+    // All 5 items processed â€” global budget exhaustion must not block
     expect(parsed.stored).toBe(5);
     expect(parsed.ids).toEqual(["id-1", "id-2", "id-3", "id-4", "id-5"]);
 
@@ -1348,9 +1348,9 @@ describe("MCP add_memories — global drain budget (MCP-02)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// NEW: Improvement #1 — semantic date fields in search results (MCP-UPDATED-AT-01)
+// NEW: Improvement #1 â€” semantic date fields in search results (MCP-UPDATED-AT-01)
 // ---------------------------------------------------------------------------
-describe("MCP search_memory — semantic date fields", () => {
+describe("MCP search_memory â€” semantic date fields", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -1392,7 +1392,7 @@ describe("MCP search_memory — semantic date fields", () => {
       {
         id: "m1", content: "No updatedAt field", rrfScore: 0.03, textRank: 1, vectorRank: 1,
         categories: [], tags: [], createdAt: "2026-01-01", appName: "test-client",
-        // updatedAt intentionally omitted — falls back to createdAt, which equals createdAt → no last_modified
+        // updatedAt intentionally omitted â€” falls back to createdAt, which equals createdAt â†’ no last_modified
       } as any,
     ]);
     mockRunWrite.mockResolvedValueOnce([]);
@@ -1403,16 +1403,16 @@ describe("MCP search_memory — semantic date fields", () => {
     });
 
     const parsed = parseToolResult(result as any) as any;
-    // When updatedAt falls back to createdAt, they match → no updated_at emitted
+    // When updatedAt falls back to createdAt, they match â†’ no updated_at emitted
     expect(parsed.results[0].created_at).toMatch(/^2026-01-01 \(/);
     expect(parsed.results[0]).not.toHaveProperty("updated_at");
   });
 });
 
 // ---------------------------------------------------------------------------
-// NEW: Improvement #2 — total_matching in search results (MCP-TOTAL-01)
+// NEW: Improvement #2 â€” total_matching in search results (MCP-TOTAL-01)
 // ---------------------------------------------------------------------------
-describe("MCP search_memory — total_matching count", () => {
+describe("MCP search_memory â€” total_matching count", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -1470,9 +1470,9 @@ describe("MCP search_memory — total_matching count", () => {
 });
 
 // ---------------------------------------------------------------------------
-// NEW: Improvement #3 — tag_filter_warning (MCP-TAG-RECALL-01)
+// NEW: Improvement #3 â€” tag_filter_warning (MCP-TAG-RECALL-01)
 // ---------------------------------------------------------------------------
-describe("MCP search_memory — tag filter recall warning", () => {
+describe("MCP search_memory â€” tag filter recall warning", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -1488,7 +1488,7 @@ describe("MCP search_memory — tag filter recall warning", () => {
   });
 
   it("MCP_TAG_WARN_01: warning emitted when tag filter drops >70% of results", async () => {
-    // 10 results from hybridSearch, only 1 has the tag → 10% retention → warning
+    // 10 results from hybridSearch, only 1 has the tag â†’ 10% retention â†’ warning
     const results = Array.from({ length: 10 }, (_, i) => ({
       id: `m${i + 1}`,
       content: `Memory ${i + 1}`,
@@ -1517,7 +1517,7 @@ describe("MCP search_memory — tag filter recall warning", () => {
   });
 
   it("MCP_TAG_WARN_02: no warning when tag filter retains >30% of results", async () => {
-    // 3 results, 2 have the tag → 67% retention → no warning
+    // 3 results, 2 have the tag â†’ 67% retention â†’ no warning
     mockHybridSearch.mockResolvedValueOnce([
       { id: "m1", content: "A", rrfScore: 0.05, textRank: 1, vectorRank: 1, categories: [], tags: ["common-tag"], createdAt: "2026-01-01", updatedAt: "2026-01-01", appName: "test-client" },
       { id: "m2", content: "B", rrfScore: 0.04, textRank: 2, vectorRank: 2, categories: [], tags: ["common-tag"], createdAt: "2026-01-01", updatedAt: "2026-01-01", appName: "test-client" },
@@ -1552,9 +1552,9 @@ describe("MCP search_memory — tag filter recall warning", () => {
 });
 
 // ---------------------------------------------------------------------------
-// NEW: Improvement #4 — suppress_auto_categories (MCP-CAT-SUPPRESS)
+// NEW: Improvement #4 â€” suppress_auto_categories (MCP-CAT-SUPPRESS)
 // ---------------------------------------------------------------------------
-describe("MCP add_memories — suppress_auto_categories", () => {
+describe("MCP add_memories â€” suppress_auto_categories", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -1615,13 +1615,13 @@ describe("MCP add_memories — suppress_auto_categories", () => {
 });
 
 // ---------------------------------------------------------------------------
-// NEW: Improvement #5 — SUPERSEDE provenance tags (SUPERSEDE-PROVENANCE)
+// NEW: Improvement #5 â€” SUPERSEDE provenance tags (SUPERSEDE-PROVENANCE)
 // ---------------------------------------------------------------------------
 // Note: provenance tag merging happens in write.ts (supersedeMemory), not in
 // server.ts. The MCP layer forwards explicit tags to supersedeMemory. The merge
 // logic is tested in write.test.ts. Here we verify the dead-code SET m.tags
 // was removed (MCP-SUPERSEDE-TAG-01) and tags are passed correctly.
-describe("MCP add_memories — SUPERSEDE provenance (dead-code removal)", () => {
+describe("MCP add_memories â€” SUPERSEDE provenance (dead-code removal)", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -1659,7 +1659,7 @@ describe("MCP add_memories — SUPERSEDE provenance (dead-code removal)", () => 
       ["session-17", "session-18"]
     );
 
-    // No separate SET m.tags runWrite call — dead code removed
+    // No separate SET m.tags runWrite call â€” dead code removed
     const tagWriteCalls = mockRunWrite.mock.calls.filter(
       (c) => typeof c[0] === "string" && (c[0] as string).includes("SET m.tags")
     );
@@ -1668,9 +1668,9 @@ describe("MCP add_memories — SUPERSEDE provenance (dead-code removal)", () => 
 });
 
 // ---------------------------------------------------------------------------
-// NEW: Improvement #6 — intra-batch dedup (MCP-BATCH-DEDUP)
+// NEW: Improvement #6 â€” intra-batch dedup (MCP-BATCH-DEDUP)
 // ---------------------------------------------------------------------------
-describe("MCP add_memories — intra-batch dedup", () => {
+describe("MCP add_memories â€” intra-batch dedup", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -1745,7 +1745,7 @@ describe("MCP add_memories — intra-batch dedup", () => {
 
   it("MCP_BATCH_DEDUP_04: intra-batch dedup only applies to STORE intents", async () => {
     // Item 1 is STORE (gets added), item 2 has different intent (INVALIDATE)
-    // → should NOT be caught by intra-batch dedup (intent is checked before dedup)
+    // â†’ should NOT be caught by intra-batch dedup (intent is checked before dedup)
     mockClassifyIntent
       .mockResolvedValueOnce({ type: "STORE" as const })
       .mockResolvedValueOnce({ type: "INVALIDATE" as const, target: "coffee" });
@@ -1761,15 +1761,15 @@ describe("MCP add_memories — intra-batch dedup", () => {
 
     const parsed = parseToolResult(result as any) as any;
     expect(parsed.stored).toBe(1);
-    // INVALIDATE intent is not skipped — it processed independently
+    // INVALIDATE intent is not skipped â€” it processed independently
     expect(mockInvalidateMemories).toHaveBeenCalled();
   });
 });
 
 // ---------------------------------------------------------------------------
-// NEW: Improvement #1 — suppress_auto_categories auto-default
+// NEW: Improvement #1 â€” suppress_auto_categories auto-default
 // ---------------------------------------------------------------------------
-describe("MCP add_memories — auto-suppress categories when explicit categories provided", () => {
+describe("MCP add_memories â€” auto-suppress categories when explicit categories provided", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -1785,7 +1785,7 @@ describe("MCP add_memories — auto-suppress categories when explicit categories
     mockSearchEntities.mockResolvedValue([]);
   });
 
-  it("MCP_CAT_AUTO_SUPPRESS_01: categories provided + no suppress flag → auto-suppressed (true)", async () => {
+  it("MCP_CAT_AUTO_SUPPRESS_01: categories provided + no suppress flag â†’ auto-suppressed (true)", async () => {
     mockCheckDeduplication.mockResolvedValueOnce({ action: "add" } as any);
     mockAddMemory.mockResolvedValueOnce("auto-sup-id");
     mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
@@ -1801,7 +1801,7 @@ describe("MCP add_memories — auto-suppress categories when explicit categories
     );
   });
 
-  it("MCP_CAT_AUTO_SUPPRESS_02: categories provided + suppress=false → explicitly NOT suppressed", async () => {
+  it("MCP_CAT_AUTO_SUPPRESS_02: categories provided + suppress=false â†’ explicitly NOT suppressed", async () => {
     mockCheckDeduplication.mockResolvedValueOnce({ action: "add" } as any);
     mockAddMemory.mockResolvedValueOnce("no-sup-id");
     mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
@@ -1821,7 +1821,7 @@ describe("MCP add_memories — auto-suppress categories when explicit categories
     );
   });
 
-  it("MCP_CAT_AUTO_SUPPRESS_03: NO categories → suppress stays false (default)", async () => {
+  it("MCP_CAT_AUTO_SUPPRESS_03: NO categories â†’ suppress stays false (default)", async () => {
     mockCheckDeduplication.mockResolvedValueOnce({ action: "add" } as any);
     mockAddMemory.mockResolvedValueOnce("default-id");
     mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
@@ -1837,7 +1837,7 @@ describe("MCP add_memories — auto-suppress categories when explicit categories
     );
   });
 
-  it("MCP_CAT_AUTO_SUPPRESS_04: empty categories array → suppress stays false", async () => {
+  it("MCP_CAT_AUTO_SUPPRESS_04: empty categories array â†’ suppress stays false", async () => {
     mockCheckDeduplication.mockResolvedValueOnce({ action: "add" } as any);
     mockAddMemory.mockResolvedValueOnce("empty-cat-id");
     mockProcessEntityExtraction.mockResolvedValueOnce(undefined);
@@ -1855,9 +1855,9 @@ describe("MCP add_memories — auto-suppress categories when explicit categories
 });
 
 // ---------------------------------------------------------------------------
-// NEW: Improvement #3 — TOUCH intent (refresh timestamp)
+// NEW: Improvement #3 â€” TOUCH intent (refresh timestamp)
 // ---------------------------------------------------------------------------
-describe("MCP add_memories — TOUCH intent", () => {
+describe("MCP add_memories â€” TOUCH intent", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -1888,7 +1888,7 @@ describe("MCP add_memories — TOUCH intent", () => {
     const parsed = parseToolResult(result as any) as any;
     expect(parsed.touched).toBe(1);
     expect(parsed.touched_ids).toEqual(["touched-id"]);
-    // No explicit tags in arguments → explicitTags is undefined
+    // No explicit tags in arguments â†’ explicitTags is undefined
     expect(mockTouchMemory).toHaveBeenCalledWith("CLUSTER-ISOLATION-01 is still unfixed", "test-user", undefined);
   });
 
@@ -1929,9 +1929,9 @@ describe("MCP add_memories — TOUCH intent", () => {
 });
 
 // ---------------------------------------------------------------------------
-// NEW: Improvement #4 — RESOLVE intent (mark as resolved)
+// NEW: Improvement #4 â€” RESOLVE intent (mark as resolved)
 // ---------------------------------------------------------------------------
-describe("MCP add_memories — RESOLVE intent", () => {
+describe("MCP add_memories â€” RESOLVE intent", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -2001,9 +2001,9 @@ describe("MCP add_memories — RESOLVE intent", () => {
 });
 
 // ---------------------------------------------------------------------------
-// NEW: Improvement #2 — Tag search recall (minimum topK)
+// NEW: Improvement #2 â€” Tag search recall (minimum topK)
 // ---------------------------------------------------------------------------
-describe("MCP search_memory — tag recall minimum topK", () => {
+describe("MCP search_memory â€” tag recall minimum topK", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -2045,7 +2045,7 @@ describe("MCP search_memory — tag recall minimum topK", () => {
       arguments: { query: "security findings", limit: 5 },
     });
 
-    // No tag → multiplier is 1, topK = 5*1 = 5
+    // No tag â†’ multiplier is 1, topK = 5*1 = 5
     expect(mockHybridSearch).toHaveBeenCalledWith("security findings", {
       userId: "test-user",
       topK: 5,
@@ -2073,9 +2073,9 @@ describe("MCP search_memory — tag recall minimum topK", () => {
 });
 
 // ---------------------------------------------------------------------------
-// NEW: Fix 1 — TOUCH tag inheritance
+// NEW: Fix 1 â€” TOUCH tag inheritance
 // ---------------------------------------------------------------------------
-describe("MCP add_memories — TOUCH tag inheritance", () => {
+describe("MCP add_memories â€” TOUCH tag inheritance", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -2136,7 +2136,7 @@ describe("MCP add_memories — TOUCH tag inheritance", () => {
 // ---------------------------------------------------------------------------
 // NEW: include_entities default true verification
 // ---------------------------------------------------------------------------
-describe("MCP search_memory — include_entities default true", () => {
+describe("MCP search_memory â€” include_entities default true", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -2192,7 +2192,7 @@ describe("MCP search_memory — include_entities default true", () => {
 // ---------------------------------------------------------------------------
 // NEW: Explicit replaces parameter tests
 // ---------------------------------------------------------------------------
-describe("MCP add_memories — explicit replaces parameter", () => {
+describe("MCP add_memories â€” explicit replaces parameter", () => {
   let client: Client;
 
   beforeAll(async () => {
@@ -2231,7 +2231,7 @@ describe("MCP add_memories — explicit replaces parameter", () => {
       undefined // no tags
     );
 
-    // checkDeduplication should NOT be called — replaces bypasses dedup
+    // checkDeduplication should NOT be called â€” replaces bypasses dedup
     expect(mockCheckDeduplication).not.toHaveBeenCalled();
   });
 
@@ -2294,7 +2294,7 @@ describe("MCP add_memories — explicit replaces parameter", () => {
       },
     });
 
-    expect(mockProcessEntityExtraction).toHaveBeenCalledWith("entity-id");
+    expect(mockProcessEntityExtraction).toHaveBeenCalledWith("entity-id", { suppressCategories: false });
   });
 
   it("MCP_REPLACES_05: replaces does not trigger addMemory", async () => {

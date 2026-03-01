@@ -23,6 +23,13 @@ jest.mock("@/lib/entities/link");
 jest.mock("@/lib/entities/relate");
 jest.mock("@/lib/entities/summarize-description");
 jest.mock("@/lib/entities/summarize-entity");
+jest.mock("@/lib/memory/categorize", () => ({
+  applyCategories: jest.fn().mockResolvedValue(undefined),
+  categorizeMemory: jest.fn().mockResolvedValue(undefined),
+}));
+import { applyCategories, categorizeMemory } from "@/lib/memory/categorize";
+const mockApplyCategories = applyCategories as jest.MockedFunction<typeof applyCategories>;
+const mockCategorize = categorizeMemory as jest.MockedFunction<typeof categorizeMemory>;
 
 // SUMMARY_THRESHOLD is 3 in the real module; auto-mock replaces it with 0.
 // We need to re-set it via require to make threshold checks work in tests.
@@ -49,7 +56,11 @@ const mockSummarizeDesc = summarizeEntityDescription as jest.MockedFunction<type
 const mockGetMentionCount = summarizeEntityModule.getEntityMentionCount;
 const mockGenerateSummary = summarizeEntityModule.generateEntitySummary;
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockApplyCategories.mockResolvedValue(undefined);
+  mockCategorize.mockResolvedValue(undefined);
+});
 
 describe("processEntityExtraction", () => {
   it("WORKER_01: processes memory, calls extract+resolve+link, sets status done", async () => {
@@ -360,5 +371,69 @@ describe("processEntityExtraction", () => {
       { since: "2024-01", role: "Engineer" },
       undefined
     );
+  });
+
+  // =====================================================================
+  // Opt 2 — Category writing (from extraction result or LLM fallback)
+  // =====================================================================
+
+  it("WORKER_12: extraction returns categories → applyCategories called, categorizeMemory NOT called", async () => {
+    mockRunRead
+      .mockResolvedValueOnce([{ status: null, content: "Alice visited Paris" }])
+      .mockResolvedValueOnce([{ userId: "user-1" }])
+      .mockResolvedValueOnce([]); // P3 previous memories
+    // NOTE: no Tier 1 read — entities:[] means the Tier 1 runRead is never called
+    mockRunWrite.mockResolvedValue([]);
+    mockExtract.mockResolvedValue({
+      entities: [],
+      relationships: [],
+      categories: ["Travel", "Personal"],
+    });
+
+    await processEntityExtraction("mem-cat-01");
+
+    // Fast path: use extraction categories — no extra LLM call for categorization
+    expect(mockApplyCategories).toHaveBeenCalledWith("mem-cat-01", ["Travel", "Personal"]);
+    expect(mockCategorize).not.toHaveBeenCalled();
+  });
+
+  it("WORKER_13: extraction returns empty categories → categorizeMemory called as LLM fallback", async () => {
+    mockRunRead
+      .mockResolvedValueOnce([{ status: null, content: "I prefer dark mode" }])
+      .mockResolvedValueOnce([{ userId: "user-1" }])
+      .mockResolvedValueOnce([]); // P3 previous memories
+    // NOTE: no Tier 1 read — entities:[] means the Tier 1 runRead is never called
+    mockRunWrite.mockResolvedValue([]);
+    mockExtract.mockResolvedValue({
+      entities: [],
+      relationships: [],
+      categories: [],
+    });
+
+    await processEntityExtraction("mem-cat-02");
+
+    // Fallback path: extraction returned no categories → fire LLM categorizer
+    expect(mockApplyCategories).not.toHaveBeenCalled();
+    expect(mockCategorize).toHaveBeenCalledWith("mem-cat-02", "I prefer dark mode");
+  });
+
+  it("WORKER_14: suppressCategories=true → neither applyCategories nor categorizeMemory called", async () => {
+    mockRunRead
+      .mockResolvedValueOnce([{ status: null, content: "Bob likes coffee" }])
+      .mockResolvedValueOnce([{ userId: "user-1" }])
+      .mockResolvedValueOnce([]); // P3 previous memories
+    // NOTE: no Tier 1 read — entities:[] means the Tier 1 runRead is never called
+    mockRunWrite.mockResolvedValue([]);
+    mockExtract.mockResolvedValue({
+      entities: [],
+      relationships: [],
+      categories: ["Food"],
+    });
+
+    await processEntityExtraction("mem-cat-03", { suppressCategories: true });
+
+    // Both category paths must be skipped when suppressCategories is true
+    expect(mockApplyCategories).not.toHaveBeenCalled();
+    expect(mockCategorize).not.toHaveBeenCalled();
   });
 });

@@ -459,4 +459,94 @@ describe("traverseEntityGraph", () => {
     // Minimum hop distance (1) should win over 2
     expect(shared!.hopDistance).toBe(1);
   });
+
+  // =====================================================================
+  // Opt 1 — Vector seeding path (queryVector bypasses LLM term extraction)
+  // =====================================================================
+
+  it("GRAPH_VEC_01: queryVector provided → LLM NOT called, vector_search.search used for seeding", async () => {
+    const queryVec = new Array(8).fill(0.1);
+
+    // Step 1 (vector seed): returns seed entities
+    mockRunRead.mockResolvedValueOnce([{ entityId: "e-vec-1" }, { entityId: "e-vec-2" }]);
+    // Community priming (vector): no matches
+    mockRunRead.mockResolvedValueOnce([]);
+    // Expand
+    mockRunRead.mockResolvedValueOnce([
+      { entityId: "e-vec-1", hops: 0, avgWeight: 1.0 },
+      { entityId: "e-vec-2", hops: 0, avgWeight: 1.0 },
+    ]);
+    // Memories
+    mockRunRead.mockResolvedValueOnce([{ memoryId: "m-vec", entityId: "e-vec-1" }]);
+
+    const results = await traverseEntityGraph("find alice meetings", USER_ID, { queryVector: queryVec });
+
+    expect(results).toEqual([{ memoryId: "m-vec", hopDistance: 0, avgWeight: 1.0 }]);
+    // LLM must NOT be called when queryVector is provided
+    expect(mockCreate).not.toHaveBeenCalled();
+    // First runRead must use vector_search.search
+    const step1Cypher = mockRunRead.mock.calls[0][0] as string;
+    expect(step1Cypher).toContain("vector_search.search");
+    expect(step1Cypher).toContain("MENTIONS");
+  });
+
+  it("GRAPH_VEC_02: community priming also uses vector_search.search when queryVector provided", async () => {
+    const queryVec = new Array(8).fill(0.2);
+
+    // Step 1 (vector seed)
+    mockRunRead.mockResolvedValueOnce([{ entityId: "e-a" }]);
+    // Community priming (vector): returns extra entity via community
+    mockRunRead.mockResolvedValueOnce([{ entityId: "e-community" }]);
+    // Expand — both direct + community seeds
+    mockRunRead.mockResolvedValueOnce([
+      { entityId: "e-a", hops: 0, avgWeight: 1.0 },
+      { entityId: "e-community", hops: 0, avgWeight: 1.0 },
+    ]);
+    // Memories
+    mockRunRead.mockResolvedValueOnce([
+      { memoryId: "m-a", entityId: "e-a" },
+      { memoryId: "m-com", entityId: "e-community" },
+    ]);
+
+    const results = await traverseEntityGraph("alice meetings", USER_ID, { queryVector: queryVec });
+
+    expect(results).toHaveLength(2);
+    // Community priming query should also use vector_search.search
+    const communityCypher = mockRunRead.mock.calls[1][0] as string;
+    expect(communityCypher).toContain("vector_search.search");
+    expect(communityCypher).toContain("IN_COMMUNITY");
+  });
+
+  it("GRAPH_VEC_03: empty vector seed results → returns empty without calling expand", async () => {
+    const queryVec = new Array(8).fill(0.3);
+
+    // Step 1 (vector seed): no matches
+    mockRunRead.mockResolvedValueOnce([]);
+    // Community priming: no matches
+    mockRunRead.mockResolvedValueOnce([]);
+
+    const results = await traverseEntityGraph("obscure topic", USER_ID, { queryVector: queryVec });
+
+    expect(results).toEqual([]);
+    // Only 2 runRead calls (seed + community priming) — no expand or memory step
+    expect(mockRunRead).toHaveBeenCalledTimes(2);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("GRAPH_VEC_04: queryVector params passed correctly to vector_search.search call", async () => {
+    const queryVec = [0.5, 0.3, 0.7, 0.1];
+
+    mockRunRead.mockResolvedValueOnce([{ entityId: "e-param" }]);
+    mockRunRead.mockResolvedValueOnce([]);
+    mockRunRead.mockResolvedValueOnce([{ entityId: "e-param", hops: 0, avgWeight: 1.0 }]);
+    mockRunRead.mockResolvedValueOnce([{ memoryId: "m-param", entityId: "e-param" }]);
+
+    await traverseEntityGraph("test query", USER_ID, { queryVector: queryVec });
+
+    // Verify the vector seed call receives correct params
+    const step1Params = mockRunRead.mock.calls[0][1] as Record<string, unknown>;
+    expect(step1Params.queryVec).toEqual(queryVec);
+    expect(step1Params.userId).toBe(USER_ID);
+    expect(step1Params.topK).toBeGreaterThan(0);
+  });
 });

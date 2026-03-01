@@ -1,4 +1,4 @@
-/**
+﻿/**
  * BASELINE TESTS -- Spec 01 pre-bi-temporal
  *
  * These document the state of the write-path BEFORE and AFTER implementing
@@ -44,7 +44,7 @@ jest.mock("neo4j-driver", () => ({
 // ---------------------------------------------------------------------------
 // Embed mock -- returns a fixed 1536-dim vector without calling OpenAI
 // ---------------------------------------------------------------------------
-jest.mock("@/lib/embeddings/openai", () => ({
+jest.mock("@/lib/embeddings/intelli", () => ({
   embed: jest.fn().mockResolvedValue(Array(1536).fill(0.1)),
 }));
 
@@ -87,7 +87,7 @@ describe("BASELINE: Bi-temporal (pre-Spec 01)", () => {
         types: { Node: class {}, Relationship: class {} },
       },
     }));
-    jest.mock("@/lib/embeddings/openai", () => ({
+    jest.mock("@/lib/embeddings/intelli", () => ({
       embed: jest.fn().mockResolvedValue(Array(1536).fill(0.1)),
     }));
   });
@@ -107,7 +107,7 @@ describe("BASELINE: Bi-temporal (pre-Spec 01)", () => {
     const cypher = allCypher();
     // RESOLVED: validAt is set; invalidAt is intentionally absent (null by default)
     expect(cypher).toContain("validAt");
-    // invalidAt must NOT be in the CREATE literal — Memgraph forbids null property literals
+    // invalidAt must NOT be in the CREATE literal â€” Memgraph forbids null property literals
     expect(cypher).not.toContain("invalidAt: null");
   });
 

@@ -1,19 +1,19 @@
-/**
- * GET /api/health — liveness + readiness probe
+﻿/**
+ * GET /api/health â€” liveness + readiness probe
  *
  * Returns:
  *   200  { status: "ok", checks: { memgraph, embeddings } }
  *   503  { status: "degraded", checks: { memgraph, embeddings } }
  *
- * Memgraph check: runs `RETURN 1 AS probe` — validates connectivity + auth.
- * Embeddings check: calls checkEmbeddingHealth() — validates provider + dim.
+ * Memgraph check: runs `RETURN 1 AS probe` â€” validates connectivity + auth.
+ * Embeddings check: calls checkEmbeddingHealth() â€” validates provider + dim.
  *
  * The response always includes the config being used (URL, user, provider)
  * so mis-configuration (wrong directory, wrong env file) is immediately visible.
  */
 import { NextResponse } from "next/server";
 import { runRead } from "@/lib/db/memgraph";
-import { checkEmbeddingHealth } from "@/lib/embeddings/openai";
+import { checkEmbeddingHealth } from "@/lib/embeddings/intelli";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +22,7 @@ export async function GET() {
   const memgraphUser = process.env.MEMGRAPH_USER ?? process.env.MEMGRAPH_USERNAME ?? "(none)";
   const startedAt = new Date().toISOString();
 
-  // ── Memgraph ──────────────────────────────────────────────────────────────
+  // â”€â”€ Memgraph â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let memgraphCheck: {
     ok: boolean;
     url: string;
@@ -42,12 +42,12 @@ export async function GET() {
       url: memgraphUrl,
       user: memgraphUser,
       error: isAuth
-        ? `Authentication failure — check MEMGRAPH_USERNAME / MEMGRAPH_PASSWORD in .env.`
+        ? `Authentication failure â€” check MEMGRAPH_USERNAME / MEMGRAPH_PASSWORD in .env.`
         : msg.slice(0, 200),
     };
   }
 
-  // ── Embeddings ────────────────────────────────────────────────────────────
+  // â”€â”€ Embeddings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let embeddingCheck: {
     ok: boolean;
     provider?: string;

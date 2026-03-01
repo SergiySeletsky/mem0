@@ -1,10 +1,10 @@
-/**
- * P1 — lib/memory/write.ts unit tests
+﻿/**
+ * P1 â€” lib/memory/write.ts unit tests
  *
  * Covers: addMemory, updateMemory, supersedeMemory, deleteMemory,
  *         archiveMemory, pauseMemory, getMemory
  *
- * All DB + embedding calls are mocked — no running Memgraph needed.
+ * All DB + embedding calls are mocked â€” no running Memgraph needed.
  */
 export {};
 
@@ -17,7 +17,7 @@ jest.mock("@/lib/db/memgraph", () => ({
 }));
 
 const mockEmbed = jest.fn();
-jest.mock("@/lib/embeddings/openai", () => ({
+jest.mock("@/lib/embeddings/intelli", () => ({
   embed: (...args: unknown[]) => mockEmbed(...args),
 }));
 
@@ -99,7 +99,7 @@ describe("addMemory", () => {
     expect(createCall).toContain("User {userId: $userId}");
   });
 
-  test("WR_06: attaches App node when appName provided — inline in the same CREATE call", async () => {
+  test("WR_06: attaches App node when appName provided â€” inline in the same CREATE call", async () => {
     await addMemory("test", { userId: "u1", appName: "cursor" });
     // 2 calls: MERGE User (call[0]) + inline CREATE Memory+App (call[1])
     expect(mockRunWrite.mock.calls.length).toBe(2);
@@ -114,12 +114,10 @@ describe("addMemory", () => {
     expect(mockRunWrite.mock.calls.length).toBe(2);
   });
 
-  test("WR_08: categorizeMemory fires async (fire-and-forget)", async () => {
+  test("WR_08: addMemory does NOT call categorizeMemory directly (categories handled by worker pipeline)", async () => {
     await addMemory("test", { userId: "u1" });
-    expect(mockCategorize).toHaveBeenCalledWith(
-      expect.any(String),
-      "test"
-    );
+    // categorizeMemory is now called from processEntityExtraction (worker), not addMemory
+    expect(mockCategorize).not.toHaveBeenCalled();
   });
 
   test("WR_09: categorize error does not reject addMemory", async () => {
@@ -157,14 +155,16 @@ describe("addMemory", () => {
     expect(mockCategorize).not.toHaveBeenCalled();
   });
 
-  test("WR_15: suppressAutoCategories=false still fires categorizeMemory", async () => {
-    await addMemory("test", { userId: "u1", suppressAutoCategories: false });
-    expect(mockCategorize).toHaveBeenCalledWith(expect.any(String), "test");
+  test("WR_15: suppressAutoCategories option accepted (API backward compat, no-op in addMemory)", async () => {
+    // Flag is preserved in AddMemoryOptions for callers that pass it through to worker
+    const id = await addMemory("test", { userId: "u1", suppressAutoCategories: false });
+    expect(typeof id).toBe("string");
+    expect(mockCategorize).not.toHaveBeenCalled();
   });
 
-  test("WR_16: omitting suppressAutoCategories fires categorizeMemory (default behavior)", async () => {
+  test("WR_16: categorizeMemory never called from addMemory regardless of suppressAutoCategories", async () => {
     await addMemory("test", { userId: "u1" });
-    expect(mockCategorize).toHaveBeenCalledWith(expect.any(String), "test");
+    expect(mockCategorize).not.toHaveBeenCalled();
   });
 });
 
@@ -200,7 +200,7 @@ describe("updateMemory", () => {
 // supersedeMemory (Spec 01)
 // ==========================================================================
 describe("supersedeMemory", () => {
-  test("WR_30: invalidates old node, creates new node and SUPERSEDES edge — all atomic in one call", async () => {
+  test("WR_30: invalidates old node, creates new node and SUPERSEDES edge â€” all atomic in one call", async () => {
     const newId = await supersedeMemory("old-id", "new content", "u1");
     expect(typeof newId).toBe("string");
     // Exactly 1 runWrite call: all steps combined atomically
@@ -228,22 +228,19 @@ describe("supersedeMemory", () => {
     expect(atomicCall).toContain("SUPERSEDES");
   });
 
-  test("WR_32: fires categorize on new memory", async () => {
+  test("WR_32: supersedeMemory does NOT call categorizeMemory (categories handled by worker pipeline)", async () => {
     await supersedeMemory("old-id", "new text", "u1");
-    expect(mockCategorize).toHaveBeenCalledWith(
-      expect.any(String),
-      "new text"
-    );
+    expect(mockCategorize).not.toHaveBeenCalled();
   });
 
-  test("WR_33: categorize failure does not break supersede", async () => {
-    mockCategorize.mockRejectedValue(new Error("boom"));
+  test("WR_33: supersedeMemory completes cleanly and returns new id", async () => {
     const id = await supersedeMemory("old-id", "new", "u1");
     expect(typeof id).toBe("string");
+    expect(id.length).toBeGreaterThan(0);
   });
 
-  test("WR_34: tag inheritance — fetches old tags via runRead when tags param omitted", async () => {
-    // Old memory has tags — they should be inherited into the new node
+  test("WR_34: tag inheritance â€” fetches old tags via runRead when tags param omitted", async () => {
+    // Old memory has tags â€” they should be inherited into the new node
     mockRunRead.mockResolvedValueOnce([{ tags: ["session-17", "production"] }]);
 
     await supersedeMemory("old-id", "new content", "u1");
@@ -272,13 +269,13 @@ describe("supersedeMemory", () => {
     // runWrite must write the merged, deduplicated tags
     expect(mockRunWrite).toHaveBeenCalledTimes(1);
     const writeParams = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
-    // session-9 (new) + session-7, project-alpha (old) — project-alpha deduplicated
+    // session-9 (new) + session-7, project-alpha (old) â€” project-alpha deduplicated
     expect(writeParams.tags).toEqual(expect.arrayContaining(["session-9", "project-alpha", "session-7"]));
     expect((writeParams.tags as string[]).length).toBe(3);
   });
 
   test("WR_36: tag inheritance falls back to empty array when old node has no tags", async () => {
-    // Old memory row has no tags property (undefined) — should default to []
+    // Old memory row has no tags property (undefined) â€” should default to []
     mockRunRead.mockResolvedValueOnce([{}]);
 
     await supersedeMemory("old-id", "no tags", "u1");

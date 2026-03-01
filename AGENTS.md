@@ -27,8 +27,9 @@
 | 17 â€" Agentic Architect Audit (MCP LTM) | Full repo audit across 6 layers using MCP as LTM | 16 findings stored (14 ADD, 2 SUPERSEDE); 6 MCP improvement opportunities identified. |
 | 18 â€" MCP Improvements (6 features) | Implement 6 audit findings from Session 17 | updated_at, total_matching, tag_filter_warning, suppress_auto_categories, SUPERSEDE provenance, intra-batch dedup. 49 suites / 480 tests. |
 | 19 â€" MCP Description Rewrite + Audit | Intent-driven tool descriptions + live audit testing Session 18 features | 11 findings stored; 4/6 Session 18 features verified live; 5 recovery tests (0.96â€"0.99 relevance). |
+| 24 â€" LLM Efficiency Optimizations | Vector seeding + category folding: 2 LLM call reductions | Opt 1: query embedding pre-shared to graph traversal (skips LLM term extraction); Opt 2: extraction prompt returns categories (skips separate categorize LLM). 54 suites / 632 tests. |
 
-**Test baseline after completed sessions:** 480 tests, 49 suites, 0 failures
+**Test baseline after completed sessions:** 632 tests, 54 suites, 0 failures
 
 ---
 
@@ -1818,3 +1819,78 @@ Response: `{"resolved": 2, "resolved_ids": ["D2LRE76ARBKT8", "A2D82LGUGL0P5"]}` 
 ### Test Baseline (unchanged — read-only audit)
 - `tsc --noEmit`: 0 errors
 - `jest --runInBand --no-coverage`: **51 suites / 538 tests — ALL PASS**
+
+---
+
+## Session 24 — LLM Efficiency Optimizations (2026-03-01)
+
+### Objective
+Reduce LLM round-trips in the hot paths: one saved per search query (Opt 1) and one saved per memory write (Opt 2).
+
+### Opt 1 — Vector Seeding in Graph Traversal
+
+**Problem:** `traverseEntityGraph()` used a separate LLM call to extract search terms before querying entities. `vectorSearch()` also embedded the query independently — so each `search_memory` triggered 2 embed calls total.
+
+**Fix — `lib/search/graph-traversal.ts`:**
+- Added `VECTOR_SEED_LIMIT = 8` constant
+- `traverseEntityGraph(query, userId, options?)` is now dual-path:
+  - **With `options.queryVector`**: seeds entity candidates via `CALL vector_search.search("memory_vectors", ...)` Cypher directly — no LLM whatsoever
+  - **Without**: original regex/LLM term extraction path unchanged
+- Community priming (P4) also uses vector Cypher when vector is available
+
+**Fix — `lib/search/vector.ts`:** 4th arg `opts?: { queryVector?: number[] }` — uses pre-computed vector, skips `embed()` when provided
+
+**Fix — `lib/search/hybrid.ts`:** `queryVector?: number[]` added to `HybridSearchOptions`; threaded through to `vectorSearch`
+
+**Fix — `lib/mcp/server.ts`:** `search_memory` handler embeds once (`queryVec`), then passes to both `hybridSearch` and `traverseEntityGraph`. Net: 1 embed call per search (was 2), 1 LLM term extraction skipped.
+
+### Opt 2 — Category Folding into Extraction Prompt
+
+**Problem:** After writing a memory, `categorizeMemory()` fired a separate LLM call. This was a full round-trip on every `addMemory()` and `supersedeMemory()`.
+
+**Fix — `lib/entities/prompts.ts`:** `ENTITY_EXTRACTION_PROMPT` JSON response requests `"categories": [...]` — 1-3 short capitalized labels.
+
+**Fix — `lib/entities/extract.ts`:** `ExtractionResult.categories?: string[]`; `normalizeExtractedCategories()` (dedup, trim, max 50 chars, cap 3); parsed from LLM response.
+
+**Fix — `lib/memory/categorize.ts`:** New `applyCategories(memoryId, categories)` export — MERGE categories to DB, **no LLM**. Idempotent.
+
+**Fix — `lib/entities/worker.ts`:** `ExtractionWorkerOptions { suppressCategories?: boolean }`; Step 4c: extraction categories → `applyCategories()`; empty → `categorizeMemory()` fallback.
+
+**Fix — `lib/memory/write.ts` + `lib/memory/bulk.ts`:** `categorizeMemory` import and all calls removed. Categories owned by entity worker.
+
+**Fix — `lib/mcp/server.ts`:** Both `processEntityExtraction(id)` calls pass `{ suppressCategories: ... }`.
+
+### Files Modified (9 source)
+
+| File | Change |
+|------|--------|
+| `lib/search/graph-traversal.ts` | Dual-path vector seeding; vector community priming |
+| `lib/search/vector.ts` | `queryVector` passthrough skips `embed()` |
+| `lib/search/hybrid.ts` | `queryVector` in `HybridSearchOptions` threaded thru |
+| `lib/mcp/server.ts` | Embed once, pass to both search arms; `suppressCategories` to worker |
+| `lib/entities/prompts.ts` | `ENTITY_EXTRACTION_PROMPT` requests `categories` in JSON |
+| `lib/entities/extract.ts` | `ExtractionResult.categories`, `normalizeExtractedCategories()` |
+| `lib/memory/categorize.ts` | New `applyCategories()` export (no LLM) |
+| `lib/entities/worker.ts` | Step 4c category write; `ExtractionWorkerOptions`; fallback |
+| `lib/memory/write.ts` + `lib/memory/bulk.ts` | `categorizeMemory` fire-and-forget removed |
+
+### Tests Added (9 new) / Updated (5 existing)
+
+| ID | File | Description |
+|----|------|-------------|
+| WORKER_12 | worker.test.ts | Extraction returns categories → `applyCategories`, not `categorizeMemory` |
+| WORKER_13 | worker.test.ts | Empty categories from extraction → `categorizeMemory` fallback |
+| WORKER_14 | worker.test.ts | `suppressCategories=true` → neither called |
+| EXTRACT_11 | extract.test.ts | LLM returns categories → parsed and normalized |
+| EXTRACT_12 | extract.test.ts | LLM omits categories → empty array default |
+| GRAPH_VEC_01 | graph-traversal.test.ts | `queryVector` → no LLM, vector_search Cypher used |
+| GRAPH_VEC_02 | graph-traversal.test.ts | Community priming uses vector Cypher |
+| GRAPH_VEC_03 | graph-traversal.test.ts | Empty vector results → early return |
+| GRAPH_VEC_04 | graph-traversal.test.ts | Correct params passed to Cypher |
+| WR_08,15,16,32,33 | write.test.ts | Updated: `categorizeMemory` no longer called from write pipeline |
+| tools.test.ts (×2) | tools.test.ts | `processEntityExtraction` updated for 2nd arg |
+| HYBRID_01 | hybrid.test.ts | `vectorSearch` 4th arg `{ queryVector: undefined }` asserted |
+
+### Verification
+- `tsc --noEmit`: **0 errors**
+- `jest --runInBand --no-coverage`: **54 suites / 632 tests — 0 failures** (up from 51/538)

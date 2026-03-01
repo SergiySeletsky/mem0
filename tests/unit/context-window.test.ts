@@ -1,27 +1,27 @@
-export {};
+﻿export {};
 /**
- * Unit tests — Ingestion Context Window (lib/memory/context.ts + addMemory integration)
+ * Unit tests â€” Ingestion Context Window (lib/memory/context.ts + addMemory integration)
  *
  * CTX_01: getRecentMemories returns correct number and order (most recent first)
  * CTX_02: getRecentMemories returns [] when user has no memories
  * CTX_03: buildContextPrefix([]) returns empty string
  * CTX_04: buildContextPrefix([m1, m2]) returns formatted prefix string
- * CTX_05: addMemory with context_window.size=0 → embed called with original text only
- * CTX_06: addMemory with context_window.enabled=false → embed called with original text only
- * CTX_07: addMemory with enabled=true + recent memories → embed called with context-enriched text
+ * CTX_05: addMemory with context_window.size=0 â†’ embed called with original text only
+ * CTX_06: addMemory with context_window.enabled=false â†’ embed called with original text only
+ * CTX_07: addMemory with enabled=true + recent memories â†’ embed called with context-enriched text
  */
 import { getRecentMemories, buildContextPrefix } from "@/lib/memory/context";
 import { addMemory } from "@/lib/memory/write";
 
 jest.mock("@/lib/db/memgraph", () => ({ runRead: jest.fn(), runWrite: jest.fn() }));
-jest.mock("@/lib/embeddings/openai", () => ({ embed: jest.fn() }));
+jest.mock("@/lib/embeddings/intelli", () => ({ embed: jest.fn() }));
 jest.mock("@/lib/config/helpers", () => ({
   getDedupConfig: jest.fn().mockResolvedValue({ enabled: false, threshold: 0.85 }),
   getContextWindowConfig: jest.fn(),
 }));
 
 import { runRead, runWrite } from "@/lib/db/memgraph";
-import { embed } from "@/lib/embeddings/openai";
+import { embed } from "@/lib/embeddings/intelli";
 import { getContextWindowConfig } from "@/lib/config/helpers";
 
 const mockRunRead = runRead as jest.MockedFunction<typeof runRead>;
@@ -55,7 +55,7 @@ describe("getRecentMemories", () => {
     expect(cypher).toContain("ORDER BY m.createdAt DESC");
   });
 
-  it("CTX_02: user has no memories → returns empty array", async () => {
+  it("CTX_02: user has no memories â†’ returns empty array", async () => {
     mockRunRead.mockResolvedValue([]);
 
     const result = await getRecentMemories("user-nobody", 10);
@@ -64,11 +64,11 @@ describe("getRecentMemories", () => {
 });
 
 describe("buildContextPrefix", () => {
-  it("CTX_03: empty array → returns empty string", () => {
+  it("CTX_03: empty array â†’ returns empty string", () => {
     expect(buildContextPrefix([])).toBe("");
   });
 
-  it("CTX_04: non-empty array → returns formatted prefix with all memories", () => {
+  it("CTX_04: non-empty array â†’ returns formatted prefix with all memories", () => {
     const memories = [
       { id: "m1", content: "I prefer dark mode", createdAt: "2026-01-01T00:00:00.000Z" },
       { id: "m2", content: "I like TypeScript", createdAt: "2026-01-02T00:00:00.000Z" },
@@ -85,7 +85,7 @@ describe("buildContextPrefix", () => {
 });
 
 describe("addMemory context window integration", () => {
-  it("CTX_05: size=0 → embed called with original text (no context prefix)", async () => {
+  it("CTX_05: size=0 â†’ embed called with original text (no context prefix)", async () => {
     mockGetContextWindowConfig.mockResolvedValue({ enabled: true, size: 0 });
     mockRunRead.mockResolvedValue([]); // no prior memories
 
@@ -94,7 +94,7 @@ describe("addMemory context window integration", () => {
     expect(mockEmbed).toHaveBeenCalledWith("I enjoy hiking");
   });
 
-  it("CTX_06: enabled=false → embed called with original text (no context prefix)", async () => {
+  it("CTX_06: enabled=false â†’ embed called with original text (no context prefix)", async () => {
     mockGetContextWindowConfig.mockResolvedValue({ enabled: false, size: 10 });
 
     await addMemory("I enjoy hiking", { userId: "user-1" });
@@ -104,7 +104,7 @@ describe("addMemory context window integration", () => {
     expect(mockRunRead).not.toHaveBeenCalled();
   });
 
-  it("CTX_07: enabled=true with recent memories → embed called with context-enriched text", async () => {
+  it("CTX_07: enabled=true with recent memories â†’ embed called with context-enriched text", async () => {
     mockGetContextWindowConfig.mockResolvedValue({ enabled: true, size: 5 });
     mockRunRead.mockResolvedValue([
       { id: "m1", content: "I hate spicy food", createdAt: "2026-01-01T00:00:00.000Z" },

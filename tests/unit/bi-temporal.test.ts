@@ -1,4 +1,4 @@
-/**
+﻿/**
  * UNIT TESTS -- Spec 01: Bi-Temporal Memory Model
  *
  * These define the contract for bi-temporal behaviour.
@@ -49,7 +49,7 @@ jest.mock("neo4j-driver", () => ({
 // ---------------------------------------------------------------------------
 // Embed mock
 // ---------------------------------------------------------------------------
-jest.mock("@/lib/embeddings/openai", () => ({
+jest.mock("@/lib/embeddings/intelli", () => ({
   embed: jest.fn().mockResolvedValue(Array(1536).fill(0.1)),
 }));
 
@@ -95,7 +95,7 @@ describe("SPEC 01: Bi-Temporal Memory Model", () => {
         types: { Node: class {}, Relationship: class {} },
       },
     }));
-    jest.mock("@/lib/embeddings/openai", () => ({
+    jest.mock("@/lib/embeddings/intelli", () => ({
       embed: jest.fn().mockResolvedValue(Array(1536).fill(0.1)),
     }));
   });
@@ -111,7 +111,7 @@ describe("SPEC 01: Bi-Temporal Memory Model", () => {
     // After Spec 01: validAt must appear in the CREATE statement
     expect(cypher).toContain("validAt");
 
-    // invalidAt must NOT be set as a null literal — Memgraph forbids null property literals
+    // invalidAt must NOT be set as a null literal â€” Memgraph forbids null property literals
     // in CREATE/MERGE. An absent property IS semantically null; WHERE m.invalidAt IS NULL
     // correctly selects live nodes.
     expect(cypher).not.toContain("invalidAt: null");

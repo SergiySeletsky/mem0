@@ -1,6 +1,6 @@
-export {};
+﻿export {};
 /**
- * Unit tests — lib/mcp/entities.ts
+ * Unit tests â€” lib/mcp/entities.ts
  *
  * Tests searchEntities, invalidateMemoriesByDescription, and deleteEntityByNameOrId
  * by mocking the DB layer, embedding, hybrid search, and deleteMemory.
@@ -13,8 +13,8 @@ export {};
  *   ENTITY_SEARCH_05:  default limit=5 applied when options omitted
  *   ENTITY_SEARCH_06:  custom limit respected (e.g., limit=2)
  *   ENTITY_SEARCH_07:  relationships fetched for each entity
- *   ENTITY_SEARCH_08:  both RELATED_TO directions captured (center→target, src→center)
- *   ENTITY_SEARCH_09:  no entities found → returns empty array
+ *   ENTITY_SEARCH_08:  both RELATED_TO directions captured (centerâ†’target, srcâ†’center)
+ *   ENTITY_SEARCH_09:  no entities found â†’ returns empty array
  *   ENTITY_SEARCH_10:  duplicate entity ids across arms appear only once in result
  *   ENTITY_SEARCH_11:  results capped at effectiveLimit after merge
  *
@@ -27,11 +27,11 @@ export {};
  *   INVALIDATE_06:  multiple matches all invalidated when above threshold
  *
  * deleteEntityByNameOrId:
- *   DELETE_ENTITY_01:  found by entityId → deleted, returns result with counts
- *   DELETE_ENTITY_02:  found by entityName (case-insensitive) → deleted
- *   DELETE_ENTITY_03:  entityName not found → returns null
- *   DELETE_ENTITY_04:  entityId provided but entity count returns empty → returns null
- *   DELETE_ENTITY_05:  neither entityId nor entityName → returns null
+ *   DELETE_ENTITY_01:  found by entityId â†’ deleted, returns result with counts
+ *   DELETE_ENTITY_02:  found by entityName (case-insensitive) â†’ deleted
+ *   DELETE_ENTITY_03:  entityName not found â†’ returns null
+ *   DELETE_ENTITY_04:  entityId provided but entity count returns empty â†’ returns null
+ *   DELETE_ENTITY_05:  neither entityId nor entityName â†’ returns null
  *   DELETE_ENTITY_06:  correct mentionEdgesRemoved and relationshipsRemoved counts returned
  *   DELETE_ENTITY_07:  DETACH DELETE called with correct userId and entityId (namespace isolation)
  */
@@ -47,7 +47,7 @@ jest.mock("@/lib/db/memgraph", () => ({
   runWrite: (...args: unknown[]) => mockRunWrite(...args),
 }));
 
-jest.mock("@/lib/embeddings/openai", () => ({
+jest.mock("@/lib/embeddings/intelli", () => ({
   embed: (...args: unknown[]) => mockEmbed(...args),
 }));
 
@@ -111,12 +111,12 @@ describe("searchEntities", () => {
   });
 
   it("ENTITY_SEARCH_02: semantic arm results merged with substring; duplicates removed", async () => {
-    // Arm 1: substring — returns e1
+    // Arm 1: substring â€” returns e1
     mockRunRead
       .mockResolvedValueOnce([
         { id: "e1", name: "Alice", type: "PERSON", description: "Engineer", memoryCount: 3 },
       ])
-      // Arm 2: semantic — returns e1 (dup) + e2 (new)
+      // Arm 2: semantic â€” returns e1 (dup) + e2 (new)
       .mockResolvedValueOnce([
         { id: "e1", name: "Alice", type: "PERSON", description: "Engineer", memoryCount: 3 },
         { id: "e2", name: "Bob", type: "PERSON", description: "Manager", memoryCount: 1 },
@@ -136,7 +136,7 @@ describe("searchEntities", () => {
     expect(ids.filter((id) => id === "e1")).toHaveLength(1);
   });
 
-  it("ENTITY_SEARCH_03: embed throws → semantic arm skipped, substring results returned", async () => {
+  it("ENTITY_SEARCH_03: embed throws â†’ semantic arm skipped, substring results returned", async () => {
     mockRunRead
       .mockResolvedValueOnce([
         { id: "e1", name: "Alice", type: "PERSON", description: null, memoryCount: 2 },
@@ -186,7 +186,7 @@ describe("searchEntities", () => {
 
     const result = await searchEntities("Entity", USER_ID);
 
-    // Default limit = 5 — only 5 should be returned
+    // Default limit = 5 â€” only 5 should be returned
     expect(result).toHaveLength(5);
   });
 
@@ -243,7 +243,7 @@ describe("searchEntities", () => {
     });
   });
 
-  it("ENTITY_SEARCH_09: no entities found → returns empty array", async () => {
+  it("ENTITY_SEARCH_09: no entities found â†’ returns empty array", async () => {
     mockRunRead
       .mockResolvedValueOnce([]) // substring
       .mockResolvedValueOnce([]); // semantic
@@ -272,7 +272,7 @@ describe("searchEntities", () => {
     }
   });
 
-  it("ENTITY_SEARCH_11: UNWIND batch — single relationship query for N entities (not N queries)", async () => {
+  it("ENTITY_SEARCH_11: UNWIND batch â€” single relationship query for N entities (not N queries)", async () => {
     // 3 entities returned from substring arm
     const threeEntities = [
       { id: "e1", name: "Alice", type: "PERSON", description: null, memoryCount: 3 },
@@ -386,7 +386,7 @@ describe("invalidateMemoriesByDescription", () => {
     expect(result[0].id).toBe("m1");
   });
 
-  it("INVALIDATE_06: mixed high/low scores — only above-threshold entries deleted", async () => {
+  it("INVALIDATE_06: mixed high/low scores â€” only above-threshold entries deleted", async () => {
     mockHybridSearch.mockResolvedValueOnce([
       { id: "m1", content: "High match", rrfScore: 0.02, textRank: 1, vectorRank: 1, categories: [], createdAt: "2024-01-01", appName: null },
       { id: "m2", content: "Low match", rrfScore: 0.008, textRank: null, vectorRank: 2, categories: [], createdAt: "2024-01-01", appName: null },
@@ -420,7 +420,7 @@ describe("invalidateMemoriesByDescription", () => {
 // deleteEntityByNameOrId
 // ---------------------------------------------------------------------------
 describe("deleteEntityByNameOrId", () => {
-  it("DELETE_ENTITY_01: found by entityId → deleted, returns counts", async () => {
+  it("DELETE_ENTITY_01: found by entityId â†’ deleted, returns counts", async () => {
     // No name lookup needed (entityId provided)
     mockRunRead
       .mockResolvedValueOnce([
@@ -460,7 +460,7 @@ describe("deleteEntityByNameOrId", () => {
     });
   });
 
-  it("DELETE_ENTITY_03: entityName not found → returns null", async () => {
+  it("DELETE_ENTITY_03: entityName not found â†’ returns null", async () => {
     mockRunRead.mockResolvedValueOnce([]); // name lookup returns nothing
 
     const result = await deleteEntityByNameOrId(USER_ID, undefined, "NonExistent");
@@ -469,7 +469,7 @@ describe("deleteEntityByNameOrId", () => {
     expect(mockRunWrite).not.toHaveBeenCalled();
   });
 
-  it("DELETE_ENTITY_04: entityId provided but count query returns empty → returns null", async () => {
+  it("DELETE_ENTITY_04: entityId provided but count query returns empty â†’ returns null", async () => {
     mockRunRead.mockResolvedValueOnce([]); // count query returns no rows
 
     const result = await deleteEntityByNameOrId(USER_ID, "missing-id");
@@ -478,7 +478,7 @@ describe("deleteEntityByNameOrId", () => {
     expect(mockRunWrite).not.toHaveBeenCalled();
   });
 
-  it("DELETE_ENTITY_05: neither entityId nor entityName → returns null immediately", async () => {
+  it("DELETE_ENTITY_05: neither entityId nor entityName â†’ returns null immediately", async () => {
     const result = await deleteEntityByNameOrId(USER_ID);
 
     expect(result).toBeNull();
@@ -486,7 +486,7 @@ describe("deleteEntityByNameOrId", () => {
     expect(mockRunWrite).not.toHaveBeenCalled();
   });
 
-  it("DELETE_ENTITY_06: count query returns row with null name → returns null", async () => {
+  it("DELETE_ENTITY_06: count query returns row with null name â†’ returns null", async () => {
     mockRunRead.mockResolvedValueOnce([{ name: null, mentionCount: 0, relationCount: 0 }]);
 
     const result = await deleteEntityByNameOrId(USER_ID, "e-bad");

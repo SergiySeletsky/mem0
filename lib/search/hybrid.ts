@@ -32,6 +32,8 @@ export interface HybridSearchOptions {
   rerank?: "none" | "cross_encoder" | "mmr";
   /** How many final results to return after reranking. Defaults to topK. */
   rerankTopN?: number;
+  /** Pre-computed query embedding — passed through to vectorSearch to avoid a duplicate embed() call. */
+  queryVector?: number[];
 }
 
 export interface HybridSearchResult extends RRFResult {
@@ -67,7 +69,7 @@ export async function hybridSearch(
         })
       : Promise.resolve([]),
     mode !== "text"
-      ? vectorSearch(query, userId, candidateSize)
+      ? vectorSearch(query, userId, candidateSize, { queryVector: opts.queryVector })
       : Promise.resolve([]),
   ]);
 

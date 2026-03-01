@@ -1,5 +1,5 @@
-/**
- * lib/mcp/entities.ts — Entity query & mutation functions for 2-tool MCP
+﻿/**
+ * lib/mcp/entities.ts â€” Entity query & mutation functions for 2-tool MCP
  *
  * Extracted from the former specialized entity tools (search_memory_entities,
  * get_memory_entity, get_related_memories, get_memory_map, delete_memory_entity).
@@ -8,10 +8,10 @@
  * add_memories uses invalidateMemoriesByDescription() and deleteEntityByNameOrId()
  * for INVALIDATE and DELETE_ENTITY intents.
  *
- * All Cypher queries anchor through User (Spec 09 — namespace isolation).
+ * All Cypher queries anchor through User (Spec 09 â€” namespace isolation).
  */
 import { runRead, runWrite } from "@/lib/db/memgraph";
-import { embed } from "@/lib/embeddings/openai";
+import { embed } from "@/lib/embeddings/intelli";
 import { hybridSearch } from "@/lib/search/hybrid";
 import { deleteMemory } from "@/lib/memory/write";
 import { parseMetadata } from "@/lib/entities/resolve";
@@ -36,7 +36,7 @@ export interface EntityProfile {
     type: string;
     target: string;
     description: string | null;
-    /** LLM-assessed relationship strength: 0.0–1.0. */
+    /** LLM-assessed relationship strength: 0.0â€“1.0. */
     weight: number;
     metadata: Record<string, unknown>;
   }>;
@@ -49,7 +49,7 @@ export interface DeleteEntityResult {
 }
 
 // ---------------------------------------------------------------------------
-// searchEntities — entity search with substring + semantic arms
+// searchEntities â€” entity search with substring + semantic arms
 // ---------------------------------------------------------------------------
 
 /**
@@ -98,7 +98,7 @@ export async function searchEntities(
     params,
   );
 
-  // Arm 2: Semantic match — embed query, cosine similarity against entity descriptions
+  // Arm 2: Semantic match â€” embed query, cosine similarity against entity descriptions
   let semanticRows: typeof substringRows = [];
   try {
     const queryEmbedding = await embed(query);
@@ -135,7 +135,7 @@ export async function searchEntities(
       semParams,
     );
   } catch {
-    // Semantic arm is best-effort — vector index may not exist on Entity nodes
+    // Semantic arm is best-effort â€” vector index may not exist on Entity nodes
   }
 
   // Merge + deduplicate by id
@@ -208,7 +208,7 @@ export async function searchEntities(
 }
 
 // ---------------------------------------------------------------------------
-// invalidateMemoriesByDescription — soft-delete memories matching a description
+// invalidateMemoriesByDescription â€” soft-delete memories matching a description
 // ---------------------------------------------------------------------------
 
 /**
@@ -232,7 +232,7 @@ export async function invalidateMemoriesByDescription(
   if (matches.length === 0) return [];
 
   // Only invalidate memories with a reasonable relevance score.
-  // RRF max theoretical score ≈ 0.0328. Threshold at ~46% of max.
+  // RRF max theoretical score â‰ˆ 0.0328. Threshold at ~46% of max.
   const RRF_THRESHOLD = 0.015;
   const toInvalidate = matches.filter((m) => m.rrfScore >= RRF_THRESHOLD);
 
@@ -251,12 +251,12 @@ export async function invalidateMemoriesByDescription(
 }
 
 // ---------------------------------------------------------------------------
-// deleteEntityByNameOrId — remove entity + all connections
+// deleteEntityByNameOrId â€” remove entity + all connections
 // ---------------------------------------------------------------------------
 
 /**
  * Delete an entity by ID or name, removing it and all its relationships.
- * Memories themselves are preserved — only the entity node and its edges are removed.
+ * Memories themselves are preserved â€” only the entity node and its edges are removed.
  * Used by add_memories for the DELETE_ENTITY intent.
  */
 export async function deleteEntityByNameOrId(
@@ -296,7 +296,7 @@ export async function deleteEntityByNameOrId(
 
   const { name, mentionCount, relationCount } = countRows[0];
 
-  // Detach delete — removes entity + all its edges
+  // Detach delete â€” removes entity + all its edges
   await runWrite(
     `MATCH (u:User {userId: $userId})-[:HAS_ENTITY]->(e:Entity {id: $entityId})
      DETACH DELETE e`,
@@ -307,7 +307,7 @@ export async function deleteEntityByNameOrId(
 }
 
 // ---------------------------------------------------------------------------
-// touchMemoryByDescription — refresh timestamp on best-matching memory
+// touchMemoryByDescription â€” refresh timestamp on best-matching memory
 // ---------------------------------------------------------------------------
 
 /**
@@ -333,8 +333,8 @@ export async function touchMemoryByDescription(
 
   if (matches.length === 0) return null;
 
-  // TOUCH is a write operation — use a high relevance threshold to prevent
-  // modifying the wrong memory. 0.025 RRF ≈ 0.76 normalized relevance_score.
+  // TOUCH is a write operation â€” use a high relevance threshold to prevent
+  // modifying the wrong memory. 0.025 RRF â‰ˆ 0.76 normalized relevance_score.
   // Better to return null ("no match found") than to touch the wrong memory.
   const RRF_THRESHOLD = 0.025;
   const best = matches[0];
@@ -363,7 +363,7 @@ export async function touchMemoryByDescription(
 }
 
 // ---------------------------------------------------------------------------
-// resolveMemoryByDescription — mark best-matching memory as resolved
+// resolveMemoryByDescription â€” mark best-matching memory as resolved
 // ---------------------------------------------------------------------------
 
 /**
@@ -385,7 +385,7 @@ export async function resolveMemoryByDescription(
 
   if (matches.length === 0) return null;
 
-  // RESOLVE is a write operation (archives the memory) — use a high relevance
+  // RESOLVE is a write operation (archives the memory) â€” use a high relevance
   // threshold to prevent resolving the wrong memory. Same threshold as TOUCH.
   const RRF_THRESHOLD = 0.025;
   const best = matches[0];
