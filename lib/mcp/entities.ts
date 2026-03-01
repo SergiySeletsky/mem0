@@ -145,7 +145,7 @@ export async function searchEntities(
          OPTIONAL MATCH (center)-[r:RELATED_TO]->(tgt:Entity)<-[:HAS_ENTITY]-(u)
          WITH center, r, tgt, eid
          WHERE r IS NOT NULL
-         RETURN eid AS entityId, center.name AS sourceName, r.relType AS relType,
+         RETURN eid AS entityId, center.name AS sourceName, r.type AS relType,
                 tgt.name AS targetName, r.description AS description
          UNION ALL
          UNWIND $entityIds AS eid
@@ -153,7 +153,7 @@ export async function searchEntities(
          OPTIONAL MATCH (u)-[:HAS_ENTITY]->(src:Entity)-[r:RELATED_TO]->(center)
          WITH center, src, r, eid
          WHERE r IS NOT NULL
-         RETURN eid AS entityId, src.name AS sourceName, r.relType AS relType,
+         RETURN eid AS entityId, src.name AS sourceName, r.type AS relType,
                 center.name AS targetName, r.description AS description`,
         { userId, entityIds },
       )

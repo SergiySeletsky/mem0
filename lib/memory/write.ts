@@ -308,12 +308,13 @@ export async function pauseMemory(
   memoryId: string,
   userId: string
 ): Promise<boolean> {
+  const now = new Date().toISOString();
   const rows = await runWrite(
     `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $id})
      WHERE m.state = 'active'
-     SET m.state = 'paused', m.updatedAt = $updatedAt
+     SET m.state = 'paused', m.invalidAt = $now, m.updatedAt = $now
      RETURN m.id AS id`,
-    { userId, id: memoryId, updatedAt: new Date().toISOString() }
+    { userId, id: memoryId, now }
   );
   const paused = rows.length > 0;
 

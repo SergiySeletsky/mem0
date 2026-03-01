@@ -344,6 +344,26 @@ describe("pauseMemory", () => {
     const cypher = mockRunWrite.mock.calls[0][0] as string;
     expect(cypher).toContain("state = 'paused'");
   });
+
+  test("WR_54: pauseMemory sets invalidAt for bi-temporal exclusion", async () => {
+    mockRunWrite.mockResolvedValue([{ id: "mem-1" }]);
+    await pauseMemory("mem-1", "u1");
+    const cypher = mockRunWrite.mock.calls[0][0] as string;
+    const params = mockRunWrite.mock.calls[0][1] as Record<string, unknown>;
+    expect(cypher).toContain("m.invalidAt = $now");
+    expect(params.now).toBeDefined();
+    expect(typeof params.now).toBe("string");
+  });
+
+  test("WR_55: paused memory excluded from live queries (invalidAt set)", async () => {
+    mockRunWrite.mockResolvedValue([{ id: "mem-1" }]);
+    await pauseMemory("mem-1", "u1");
+    const cypher = mockRunWrite.mock.calls[0][0] as string;
+    // Verify SET clause contains both state and invalidAt
+    expect(cypher).toContain("m.state = 'paused'");
+    expect(cypher).toContain("m.invalidAt = $now");
+    expect(cypher).toContain("m.updatedAt = $now");
+  });
 });
 
 // ==========================================================================

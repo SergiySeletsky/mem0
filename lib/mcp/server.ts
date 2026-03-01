@@ -325,15 +325,23 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         const deletedEntity = results.find(r => r.event === "DELETE_ENTITY");
         if (deletedEntity) response.deleted = (deletedEntity as any).deleted?.entity ?? null;
 
-        // Touch: count of memories whose timestamp was refreshed
-        const touchedCount = results
-          .filter(r => r.event === "TOUCH" && (r as any).touched !== null).length;
-        if (touchedCount) response.touched = touchedCount;
+        // Touch: count + IDs of memories whose timestamp was refreshed
+        const touchedItems = results
+          .filter(r => r.event === "TOUCH" && (r as any).touched !== null)
+          .map(r => (r as any).touched as { id: string; content: string });
+        if (touchedItems.length) {
+          response.touched = touchedItems.length;
+          response.touched_ids = touchedItems.map(t => t.id);
+        }
 
-        // Resolve: count of memories marked as resolved
-        const resolvedCount = results
-          .filter(r => r.event === "RESOLVE" && (r as any).resolved !== null).length;
-        if (resolvedCount) response.resolved = resolvedCount;
+        // Resolve: count + IDs of memories marked as resolved
+        const resolvedItems = results
+          .filter(r => r.event === "RESOLVE" && (r as any).resolved !== null)
+          .map(r => (r as any).resolved as { id: string; content: string });
+        if (resolvedItems.length) {
+          response.resolved = resolvedItems.length;
+          response.resolved_ids = resolvedItems.map(t => t.id);
+        }
 
         return {
           content: [{ type: "text", text: JSON.stringify(response) }],

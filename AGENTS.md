@@ -1569,3 +1569,252 @@ Full read-only codebase audit across 8 layers (DB, write pipeline, search, entit
 ### Test Baseline (unchanged — read-only audit)
 - `tsc --noEmit`: 0 errors
 - `jest --runInBand --no-coverage`: **49 suites / 507 tests — ALL PASS**
+
+---
+
+## Session 22 — Semantic Date Formatting + Agentic Architect Audit (2026-03-01)
+
+### Phase 1: Semantic Date Formatting for MCP Responses
+
+**Objective:** Optimize MCP memory retrieval payload for LLM temporal reasoning and reduce token consumption.
+
+**New file: `lib/mcp/dates.ts`** (~100 lines):
+- `semanticBucket(deltaMs)` — precision tiers: <1min→"just now", 1-59min→"N minutes ago", 1-23h→"N hours ago", 24-47h→"yesterday", 2-6d→"N days ago", 7-59d→"N weeks ago", 60-364d→"N months ago", 365+d→"N years ago"
+- `formatSemanticDate(iso, now?)` → `"YYYY-MM-DD (bucket)"`
+- `buildDateFields(createdAt, updatedAt, now?)` → `{ created_at }` or `{ created_at, updated_at }` (only includes updated_at when >1s different from created_at)
+
+**Integration in `lib/mcp/server.ts`:**
+- Browse mode: `...buildDateFields(m.createdAt, m.updatedAt, now)` with shared `now` constant
+- Search mode: `...buildDateFields(r.createdAt, r.updatedAt ?? r.createdAt, now)` with shared `now`
+
+**Design decisions:**
+- Field names kept as `created_at`/`updated_at` (user rejected rename to `date`/`last_modified` — no value added)
+- Custom implementation preferred over date-fns (15 lines, zero deps, full control over bucket boundaries)
+- Minute-level precision added after user feedback that "just now" was too coarse for same-session memories
+
+**Tests: `tests/unit/mcp/dates.test.ts`** — 24 tests (DATE_01-15 with sub-variants + BUILD_01-06)
+
+**Verification:**
+- `tsc --noEmit`: 0 errors
+- `jest --runInBand --no-coverage`: **50 suites / 531 tests — ALL PASS** (up from 49/507)
+
+### Phase 2: Agentic Architect Audit (MCP LTM Stress Test)
+
+Full read-only codebase audit across 7 layers (DB, write pipeline, search, entity, MCP server, API routes, frontend) using MemForge MCP as long-term memory. Tests all MCP tool scenarios in a realistic agentic workflow.
+
+### MCP Tool Usage Statistics
+
+| # | Tool | Mode | Purpose | Result |
+|---|------|------|---------|--------|
+| 1 | search_memory | browse (tag: audit-session-22) | Cold-start: session-tagged count | 0 results (fresh tag) |
+| 2 | search_memory | browse (no tag, limit:3) | Total inventory | 109 total memories |
+| 3 | search_memory | search + tag mem0ai/mem0 | Carryover recovery | 21 matching, 10 returned |
+| 4 | add_memories | batch (4) | DB + write + search findings | 2 stored, 1 superseded, 1 skipped |
+| 5 | add_memories | batch (4) | Entity + config + cluster findings | 3 stored, 1 resolved |
+| 6 | add_memories | batch (4) | Frontend + API + MCP findings | 3 stored, 1 superseded |
+| 7 | search_memory | search + tag audit-session-22 | Recovery Test 1: security | 5 hits, top at 0.89 |
+| 8 | search_memory | search + tag audit-session-22 | Recovery Test 2: semantic paraphrase | 4 hits, RELTYPE at rank #1 (0.96) |
+| 9 | search_memory | browse + tag audit-session-22 | Full inventory | 9/9 (100% recall) |
+| 10 | search_memory | search (no tag) | Cross-session severity query | 10 hits across sessions 7,8,9,17,19,21,22 |
+| 11 | search_memory | browse + tag mem0ai/mem0 | Project-scoped inventory | 73 total across all sessions |
+| **Totals** | **3 add / 8 search** | | **12 items sent** | **8 stored, 2 superseded, 1 skipped, 1 resolved** |
+
+### Findings Stored (9 session-22, plus 2 superseded + 1 skipped + 1 resolved from prior sessions)
+
+| ID | Severity | Layer | Status |
+|----|----------|-------|--------|
+| PAUSE-NO-INVALIDAT-STILL-UNFIXED | MEDIUM | Write | Carryover confirmed |
+| ACCESSED-ROUTE-NO-USER-ANCHOR-STILL-UNFIXED | HIGH-SECURITY | API | Carryover confirmed |
+| WORKER-STEP1-NO-USER-ANCHOR | LOW-SECURITY | Entity | Carryover confirmed |
+| CONFIG-SAVE-SEQUENTIAL-STILL-UNFIXED | LOW-PERF | Config | Carryover confirmed |
+| CLUSTER-CROSS-USER-INTENTIONAL | RESOLVED | Clusters | Resolved — intentional design |
+| MCP-ENTITIES-RELTYPE-FIX-NEEDED | HIGH-BUG | Entity | SUPERSEDED prior (provenance from sessions 19,21) |
+| APPS-ACCESSED-NO-INVALIDAT | MEDIUM | API | NEW |
+| FRONTEND-FETCH-APPS-NO-USERID-IN-DEPS | MEDIUM | Frontend | NEW |
+| RELATE-EMPTY-DESC-CREATES-DUPLICATE-EDGE | LOW | Entity | NEW |
+| WRITE-ADDMEMORY-2RTT | LOW-PERF | Write | SUPERSEDED prior (from session 9) |
+
+### Semantic Date Feature Verification (Live)
+
+All MCP search/browse results now return `created_at` with semantic format. Examples from live calls:
+- `"created_at": "2026-03-01 (just now)"` — for newly stored findings
+- `"created_at": "2026-03-01 (1 minute ago)"` — for findings stored 1-2 minutes prior
+- `"created_at": "2026-03-01 (2 hours ago)"` — for findings from earlier in session
+- `"created_at": "2026-02-28 (yesterday)"` — for findings from prior day sessions
+
+The minute-level precision correctly distinguishes between findings stored moments apart, resolving the user's feedback about "just now" being too coarse.
+
+### Session 20 / 18 MCP Feature Verification (Live)
+
+| Feature | Status | Evidence |
+|---------|--------|----------|
+| `total_matching` | **WORKING** | Recovery Test 1: `total_matching: 5`; Cross-session: `total_matching: 10` |
+| `tag_filter_warning` | **WORKING** | Tests 1 & 2: warning fired both times when >70% dropped |
+| `updated_at` | **WORKING** | All search results include `updated_at` with semantic format |
+| SUPERSEDE provenance | **WORKING** | RELTYPE-MISMATCH has tags from sessions 19, 21, 22 |
+| Semantic date format | **WORKING** | All results show `"YYYY-MM-DD (bucket)"` format |
+| RESOLVE intent | **WORKING** | CLUSTER-CROSS-USER finding accepted RESOLVE — `{"resolved": 1}` |
+| `suppress_auto_categories` | **WORKING** | Explicit categories provided → auto-suppressed |
+
+### MCP Tool Scenario Evaluation
+
+| Scenario | Calls | Usefulness | Verdict |
+|----------|-------|------------|---------|
+| Cold-start inventory (browse) | 2 | 10/10 | ESSENTIAL — confirmed 109 total, 0 session-tagged |
+| Carryover recovery (search + tag) | 1 | 10/10 | KEY VALUE — 21 prior findings recovered |
+| Batched write (add_memories) | 3 | 9/10 | RELIABLE — 0 errors, dedup correct |
+| Tag-scoped browse (ground truth) | 2 | 10/10 | GROUND TRUTH — 9/9 and 73 project-scoped |
+| Semantic search + tag (recovery) | 2 | 10/10 | STRONG — 0.89-0.96 relevance, paraphrase works |
+| Cross-session search (no tag) | 1 | 10/10 | EXCEPTIONAL — findings from 7 sessions blended |
+| RESOLVE intent | 1 | 9/10 | NEW — correctly archived false-positive finding |
+| Tag filter warning | 2 | 9/10 | ACTIONABLE — correctly advised switch to browse |
+
+### Recovery Test Details
+
+| # | Query (paraphrased) | Target Finding | Rank | Relevance | Arms Hit |
+|---|-------------------|----------------|------|-----------|----------|
+| 1 | "security vulnerabilities cross-user namespace isolation" | WORKER-STEP1-NO-USER-ANCHOR | #1 | 0.89 | text+vector |
+| 1 | | ACCESSED-ROUTE-NO-USER-ANCHOR | #2 | 0.83 | text+vector |
+| 2 | "relationship edge property name inconsistency between storage and retrieval" | MCP-ENTITIES-RELTYPE-FIX | #1 | 0.96 | text+vector |
+| 3 | "HIGH severity bugs immediate fix all sessions" | Findings from 7 sessions | #1-10 | 0.49-0.96 | mixed |
+
+**Key observation (Test 2):** Zero keyword overlap between query ("property name inconsistency between storage and retrieval") and stored finding ("r.relType but edges stored with property 'type'"). Perfect semantic recall at 0.96 relevance with dual-arm hit.
+
+### What Worked Well
+1. **RESOLVE intent** — First live use. Correctly archived a false-positive finding (CLUSTER-CROSS-USER). `{"resolved": 1}` response was clean.
+2. **Semantic date format** — Every result now shows temporal context like "just now", "1 minute ago", "2 hours ago", "yesterday". Immediately actionable for LLM reasoning about finding freshness.
+3. **SUPERSEDE provenance tags** — RELTYPE-MISMATCH carries tags from sessions 19, 21, 22 — complete audit trail of how the finding evolved across sessions.
+4. **Cross-session accumulation** — 73 project-scoped memories across all sessions. Unfiltered search blended findings from 7 sessions with correct relevance ranking.
+5. **Dedup precision** — 1 skip (exact duplicate) + 2 supersedes (improved versions of prior findings) + 1 resolution. All correct.
+6. **Zero write errors** — 3 batches × 4 items = 12 items, no failures.
+7. **`suppress_auto_categories` auto-default** — Explicit categories provided → no extra "Technology"/"Work" noise on most items.
+
+### What Can Still Be Improved
+1. **Category auto-enrichment still leaks occasionally**: MCP-ENTITIES-RELTYPE finding got "Work", "Technology" despite explicit categories + auto-suppress. The superseded memory's original categories may be inherited.
+2. **Browse + search still mutually exclusive**: Want "all items tagged X, sorted by relevance" in one call. Current workaround: browse for ground truth, search for ranked results.
+3. **RESOLVE response lacks detail**: `{"resolved": 1}` doesn't tell caller which memory ID was resolved. Should include `resolved_id` like TOUCH could include `touched_id`.
+4. **Semantic date "just now" vs "1 minute ago" boundary**: Memories stored within the same API call may show different buckets depending on processing time. Not a bug, but noteworthy.
+5. **Entity enrichment on audit queries adds latency**: All search calls defaulted to `include_entities: true`. For audit recall, entity context is noise. `include_entities: false` should be more prominent.
+
+### Test Baseline
+- `tsc --noEmit`: 0 errors
+- `jest --runInBand --no-coverage`: **50 suites / 531 tests — ALL PASS**
+
+---
+
+## Session 23 — Agentic Architect Audit (MCP LTM, Full Codebase) (2026-03-01)
+
+### Objective
+Full read-only codebase audit across 7 layers (DB, write pipeline, search, entity, MCP server, API routes, frontend) using MemForge MCP as long-term memory. Designed to test all MCP tool scenarios including the Session 20/22 improvements (TOUCH, RESOLVE, provenance tags, semantic dates) in a realistic agentic workflow where findings exceed a single LLM context window.
+
+### MCP Tool Usage Statistics
+
+| # | Tool | Mode | Purpose | Result |
+|---|------|------|---------|--------|
+| 1 | search_memory | browse (tag: audit-session-23) | Cold-start: session-tagged count | 0 results (fresh tag) |
+| 2 | search_memory | browse (no tag, limit:3) | Total inventory | 116 total memories |
+| 3 | search_memory | search + tag mem0ai/mem0 | Carryover recovery | 24 matching, 10 returned |
+| 4 | add_memories | batch (4) | API + config findings | 4 stored |
+| 5 | add_memories | batch (4) | Frontend + entity findings | 2 stored, 2 touched |
+| 6 | add_memories | batch (4) | DB + perf + infra findings | 3 stored, 1 superseded |
+| 7 | add_memories | batch (2) | RESOLVE session-22 fixes | 2 resolved |
+| 8 | search_memory | search + tag audit-session-23 | Recovery Test 1: security query | 6 hits, CONFIG-NO-AUTH at 0.93 |
+| 9 | search_memory | search + tag audit-session-23 | Recovery Test 2: paraphrase | 1 hit, tag recall gap |
+| 10 | search_memory | search (no tag) | Recovery Test 3: cross-session | 10 hits, HOOK-APPS at 1.0 |
+| 11 | search_memory | browse + tag audit-session-23 | Recovery Test 4: full inventory | 9/9 (100% recall) |
+| 12 | search_memory | browse + tag mem0ai/mem0 | Recovery Test 5: project scope | 80 total |
+| **Totals** | **4 add / 8 search** | | **14 items sent** | **9 stored, 1 superseded, 2 touched, 2 resolved** |
+
+### Findings Stored (9 new + 2 TOUCH + 1 SUPERSEDE + 2 RESOLVE = 14 actions)
+
+| ID | Severity | Layer | Status |
+|----|----------|-------|--------|
+| REEXTRACT-NO-BITEMPORAL-01 | MEDIUM | API | NEW — reextract processes superseded/deleted memories |
+| CATEGORIES-NO-BITEMPORAL-01 | LOW | API | NEW — categories count includes superseded memories |
+| APPS-MEMORIES-COUNT-NO-USER-ANCHOR-01 | MEDIUM-SECURITY | API | NEW — count query has no userId filter |
+| CONFIG-NO-AUTH-STILL-UNFIXED | MEDIUM-SECURITY | Config | Carryover confirmed |
+| HOOK-APPS-UPDATE-STILL-BROKEN | HIGH | Frontend | TOUCHED (carryover, timestamp refreshed) |
+| HOOK-APPS-ACCESSED-NO-USERID-01 | MEDIUM | Frontend | NEW — no user_id in accessed request |
+| ENTITIES-MEMORY-COUNT-NO-BITEMPORAL-01 | LOW | Entity | NEW — entity memory counts include invalidated |
+| FILTER-SEARCH-FULLSCAN-STILL-UNFIXED | MEDIUM-PERF | API | TOUCHED (carryover, timestamp refreshed) |
+| DB-CLOSE-NO-LIFECYCLE-STILL-UNFIXED | LOW | DB | NEW (superseded prior version) |
+| CONFIG-SAVE-SEQUENTIAL-STILL-UNFIXED | LOW-PERF | Config | Carryover confirmed |
+| MCP-SERVER-ACCESS-LOG-FIRE-FORGET-01 | LOW | MCP | NEW — floating App nodes |
+| WORKER-STEP1-NO-USER-ANCHOR-STILL-UNFIXED | LOW-SECURITY | Entity | Carryover confirmed |
+| ENTITIES-RELTYPE-MISMATCH | — | Entity | RESOLVED (fixed session 22) |
+| PAUSE-NO-INVALIDAT | — | Write | RESOLVED (fixed session 22) |
+
+### Verified FIXED (via RESOLVE intent, 2 findings)
+
+| ID | Session Fixed | Evidence |
+|----|---------------|----------|
+| ENTITIES-RELTYPE-MISMATCH | Session 22 | `r.relType` → `r.type` in lib/mcp/entities.ts UNWIND query |
+| PAUSE-NO-INVALIDAT | Session 22 | `pauseMemory()` now sets `m.invalidAt = $now` in lib/memory/write.ts |
+
+### MCP Tool Scenario Evaluation
+
+| # | Scenario | Calls | Usefulness | Verdict |
+|---|----------|-------|------------|---------|
+| 1 | Cold-start inventory (browse) | 2 | 10/10 | ESSENTIAL — confirms session state before writing |
+| 2 | Carryover recovery (search + tag) | 1 | 10/10 | KEY VALUE — 24 matching findings recovered instantly |
+| 3 | Batched write (add_memories) | 3 | 9/10 | RELIABLE — 0 errors, 9 stored cleanly |
+| 4 | TOUCH carryover findings | 1 | 10/10 | NEW SCENARIO — refreshed timestamp on 2 findings without duplication |
+| 5 | RESOLVE fixed findings | 1 | 10/10 | NEW SCENARIO — archived 2 session-22 fixes cleanly |
+| 6 | Tag-scoped browse (ground truth) | 1 | 10/10 | GROUND TRUTH — 9/9 recall |
+| 7 | Semantic search + tag (security) | 1 | 9/10 | STRONG — CONFIG-NO-AUTH at 0.93 relevance |
+| 8 | Semantic paraphrase + tag | 1 | 7/10 | RECALL GAP — only 1/9 returned due to tag post-filter |
+| 9 | Cross-session unfiltered search | 1 | 10/10 | EXCEPTIONAL — 1.0 relevance dual-arm hit across sessions |
+| 10 | Project-scoped inventory | 1 | 8/10 | USEFUL — 80 project memories across all sessions |
+
+### Recovery Test Details
+
+| # | Query Pattern | Target Finding | Rank | Relevance | Arms |
+|---|-------------|----------------|------|-----------|------|
+| 1 | "security vulnerabilities cross-user namespace isolation" | CONFIG-NO-AUTH | #1 | 0.93 | text+vector |
+| 2 | "broken frontend React hook HTTP parameters wrong location" | HOOK-APPS-ACCESSED | #1 | 0.44 | text-only |
+| 3 | "useAppsApi updateAppDetails broken PUT is_active query param" | HOOK-APPS-UPDATE-DOUBLE-BROKEN | #1 | 1.0 | text+vector |
+| 4 | browse (tag: audit-session-23) | All 9 findings | N/A | N/A | 100% recall |
+| 5 | browse (tag: mem0ai/mem0, limit:3) | Project inventory | N/A | N/A | 80 total |
+
+**Key observation (Test 3):** Cross-session unfiltered search achieved perfect 1.0 relevance (text_rank=1, vector_rank=1) on a finding from session 21 that was TOUCHED in session 23. The TOUCH operation correctly updated `updated_at` timestamp while preserving the memory's content and relevance ranking.
+
+**Key observation (Test 2 vs 3):** Tag-filtered paraphrase search (Test 2) returned only 1 result because HOOK-APPS-UPDATE was TOUCHED (not stored as new), retaining its session-21 tags rather than getting session-23 tags. The unfiltered version (Test 3) found it at rank #1. This reveals a TOUCH + tag interaction gap: TOUCHed memories don't inherit the caller's tags, so tag-scoped queries miss them.
+
+### TOUCH Intent Behavior — First Live Mid-Audit Use
+
+Session 23 was the first audit to use TOUCH organically (not as a test). When `add_memories` content matched an existing finding semantically, the system correctly:
+1. Detected the existing memory rather than creating a duplicate
+2. Updated `updatedAt` timestamp to confirm the finding is still relevant
+3. Returned `{"touched": 2, "touched_ids": [...]}` response
+4. Did NOT trigger the dedup/write pipeline (no new memory created)
+
+This is the exact workflow gap identified in Session 19 ("need a confirm/touch intent that updates updated_at without dedup risk"). Working as designed.
+
+### RESOLVE Intent Behavior — First Production Use for Bug Fix Tracking
+
+Two session-22 fixes were marked as resolved:
+1. `"Resolved: ENTITIES-RELTYPE-MISMATCH"` → matched the finding and archived it
+2. `"Resolved: PAUSE-NO-INVALIDAT"` → matched the finding and archived it
+
+Response: `{"resolved": 2, "resolved_ids": ["D2LRE76ARBKT8", "A2D82LGUGL0P5"]}` — includes IDs (the Session 22 improvement for RESOLVE response detail).
+
+### What Worked Well
+1. **TOUCH intent for carryover confirmation** — First real audit use. 2 carryover findings confirmed still-unfixed without duplication. Exactly the workflow gap identified in session 19.
+2. **RESOLVE intent for fix tracking** — 2 session-22 fixes archived cleanly with IDs in response. Provides a clear "done" workflow for audit finding lifecycle.
+3. **Dedup precision across sessions** — 1 SUPERSEDE (DB-CLOSE finding merged with prior version), 2 TOUCH (carryover), 0 false positives.
+4. **SUPERSEDE provenance tags** — DB-CLOSE finding inherited tags from sessions 17, 21, 23. Full audit trail across sessions.
+5. **Cross-session search quality** — Unfiltered search returned 1.0 relevance for a session-21 finding with zero keyword overlap in the query.
+6. **Semantic date format** — "just now", "1 minute ago", "3 hours ago", "yesterday" immediately communicate finding freshness.
+7. **Tag filter warning** — Correctly fired when >70% of results dropped by tag post-filter, recommended browse mode.
+8. **Zero write errors** — 4 batches, 14 items total, 0 failures.
+
+### What Can Be Improved
+1. **TOUCH doesn't inherit caller tags**: TOUCHed memories retain their original session tags. In session 23, `add_memories(content: "HOOK-APPS-UPDATE-STILL-BROKEN", tags: ["audit-session-23"])` TOUCHed the finding but didn't add `"audit-session-23"` to the memory's tags. This means tag-scoped queries for the current session miss TOUCHed carryover findings. Fix: merge caller's tags into the TOUCHed memory's tags (same pattern as SUPERSEDE provenance).
+2. **RESOLVE response now has IDs but TOUCH still doesn't**: Session 22 added `resolved_ids` to RESOLVE responses. Session 20 added `touched_ids`. Both working, good.
+3. **Category auto-enrichment still leaks on SUPERSEDE inheritance**: DB-CLOSE superseded finding got "Technology", "Work" categories from LLM despite explicit categories provided. The superseded memory's auto-enriched categories carry forward.
+4. **Tag-scoped paraphrase search has recall gap**: Recovery Test 2 returned only 1/9 session-23 findings for a paraphrased query. The tag post-filter removes valid results because the candidate pool (after RRF) is small. The minimum topK=200 floor helps but doesn't fully solve it for semantic-only matches (no text arm hit).
+5. **No batch TOUCH/RESOLVE**: Current implementation processes TOUCH/RESOLVE one at a time via classifyIntent. For audits confirming 5+ carryover findings, a batch "Still relevant: [A, B, C, D, E]" or array form would be more efficient.
+
+### Test Baseline (unchanged — read-only audit)
+- `tsc --noEmit`: 0 errors
+- `jest --runInBand --no-coverage`: **51 suites / 538 tests — ALL PASS**

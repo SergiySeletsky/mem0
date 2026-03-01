@@ -1677,7 +1677,7 @@ describe("MCP add_memories — TOUCH intent", () => {
     mockSearchEntities.mockResolvedValue([]);
   });
 
-  it("MCP_TOUCH_01: TOUCH intent calls touchMemoryByDescription and returns touched count", async () => {
+  it("MCP_TOUCH_01: TOUCH intent calls touchMemoryByDescription and returns touched count + IDs", async () => {
     mockClassifyIntent.mockResolvedValueOnce({
       type: "TOUCH" as const,
       target: "CLUSTER-ISOLATION-01 is still unfixed",
@@ -1691,6 +1691,7 @@ describe("MCP add_memories — TOUCH intent", () => {
 
     const parsed = parseToolResult(result as any) as any;
     expect(parsed.touched).toBe(1);
+    expect(parsed.touched_ids).toEqual(["touched-id"]);
     expect(mockTouchMemory).toHaveBeenCalledWith("CLUSTER-ISOLATION-01 is still unfixed", "test-user");
   });
 
@@ -1749,7 +1750,7 @@ describe("MCP add_memories — RESOLVE intent", () => {
     mockSearchEntities.mockResolvedValue([]);
   });
 
-  it("MCP_RESOLVE_01: RESOLVE intent calls resolveMemoryByDescription and returns resolved count", async () => {
+  it("MCP_RESOLVE_01: RESOLVE intent calls resolveMemoryByDescription and returns resolved count + IDs", async () => {
     mockClassifyIntent.mockResolvedValueOnce({
       type: "RESOLVE" as const,
       target: "TTL cache issue in config helpers",
@@ -1763,6 +1764,7 @@ describe("MCP add_memories — RESOLVE intent", () => {
 
     const parsed = parseToolResult(result as any) as any;
     expect(parsed.resolved).toBe(1);
+    expect(parsed.resolved_ids).toEqual(["resolved-id"]);
     expect(mockResolveMemory).toHaveBeenCalledWith("TTL cache issue in config helpers", "test-user");
   });
 

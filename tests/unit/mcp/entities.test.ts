@@ -297,6 +297,23 @@ describe("searchEntities", () => {
     expect(result[1].relationships[0].type).toBe("MANAGES");
     expect(result[2].relationships).toHaveLength(0); // Carol has 0
   });
+
+  it("ENTITY_SEARCH_12: UNWIND relationship Cypher reads r.type (not r.relType) for edge property", async () => {
+    mockRunRead
+      .mockResolvedValueOnce([
+        { id: "e1", name: "Alice", type: "PERSON", description: null, memoryCount: 1 },
+      ])
+      .mockResolvedValueOnce([]) // semantic
+      .mockResolvedValueOnce([]); // relationships
+    mockEmbed.mockResolvedValueOnce([]);
+
+    await searchEntities("Alice", USER_ID);
+
+    // The UNWIND relationship query should use r.type (the actual edge property)
+    const relCypher = mockRunRead.mock.calls[2][0] as string;
+    expect(relCypher).toContain("r.type AS relType");
+    expect(relCypher).not.toContain("r.relType");
+  });
 });
 
 // ---------------------------------------------------------------------------

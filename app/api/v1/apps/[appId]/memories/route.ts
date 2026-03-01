@@ -20,7 +20,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   const rows = await runRead<{ id: string; content: string; state?: string; createdAt?: string; metadata?: string; app_name?: string; categories?: string[] }>(
     `MATCH (u:User)-[:HAS_MEMORY]->(m:Memory)-[:CREATED_BY]->(a:App)
      WHERE (a.appName = $appId OR a.id = $appId)
-     AND m.state = 'active' ${userClause}
+     AND m.state = 'active' AND m.invalidAt IS NULL ${userClause}
      WITH m, a
      OPTIONAL MATCH (m)-[:HAS_CATEGORY]->(c:Category)
      WITH m, a, collect(c.name) AS categories
@@ -33,7 +33,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   const countRows = await runRead(
     `MATCH (:User)-[:HAS_MEMORY]->(m:Memory)-[:CREATED_BY]->(a:App)
      WHERE (a.appName = $appId OR a.id = $appId)
-     AND m.state = 'active' RETURN count(m) AS total`,
+     AND m.state = 'active' AND m.invalidAt IS NULL RETURN count(m) AS total`,
     { appId }
   );
   const total = (countRows[0] as { total?: number })?.total ?? 0;
