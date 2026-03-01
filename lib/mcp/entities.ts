@@ -286,11 +286,17 @@ export async function deleteEntityByNameOrId(
 /**
  * Find the best-matching memory for a description and update its `updatedAt`
  * timestamp without modifying content. Used by add_memories for the TOUCH intent.
+ *
+ * When `tags` is provided, merges caller tags with the memory's existing tags
+ * (deduplicated, same pattern as SUPERSEDE provenance) so that TOUCHed memories
+ * inherit the caller's session/project tags.
+ *
  * Returns the touched memory for the response payload, or null if no match.
  */
 export async function touchMemoryByDescription(
   description: string,
-  userId: string
+  userId: string,
+  tags?: string[]
 ): Promise<{ id: string; content: string } | null> {
   const matches = await hybridSearch(description, {
     userId,
@@ -306,11 +312,23 @@ export async function touchMemoryByDescription(
   if (best.rrfScore < RRF_THRESHOLD) return null;
 
   const now = new Date().toISOString();
-  await runWrite(
-    `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memId})
-     SET m.updatedAt = $now`,
-    { userId, memId: best.id, now }
-  );
+
+  if (tags && tags.length > 0) {
+    // Merge caller tags with existing tags (same pattern as SUPERSEDE provenance)
+    const existingTags = best.tags ?? [];
+    const mergedTags = [...new Set([...tags, ...existingTags])];
+    await runWrite(
+      `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memId})
+       SET m.updatedAt = $now, m.tags = $mergedTags`,
+      { userId, memId: best.id, now, mergedTags }
+    );
+  } else {
+    await runWrite(
+      `MATCH (u:User {userId: $userId})-[:HAS_MEMORY]->(m:Memory {id: $memId})
+       SET m.updatedAt = $now`,
+      { userId, memId: best.id, now }
+    );
+  }
 
   return { id: best.id, content: best.content };
 }

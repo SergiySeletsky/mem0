@@ -824,7 +824,7 @@ describe("MCP Tool Handlers -- search_memory entity enrichment", () => {
     mockSearchEntities.mockResolvedValue([]);
   });
 
-  it("MCP_SM_05: search response includes entity profiles when found", async () => {
+  it("MCP_SM_05: search response includes entity profiles by default", async () => {
     mockHybridSearch.mockResolvedValueOnce([
       { id: "m1", content: "Alice works at Acme", rrfScore: 0.03, textRank: 1, vectorRank: 1, categories: ["work"], tags: [], createdAt: "2024-01-01", updatedAt: "2024-01-01", appName: "test-client" },
     ]);
@@ -842,6 +842,7 @@ describe("MCP Tool Handlers -- search_memory entity enrichment", () => {
 
     const result = await client.callTool({
       name: "search_memory",
+      // No include_entities param — default is true
       arguments: { query: "Alice" },
     });
 
@@ -1692,7 +1693,8 @@ describe("MCP add_memories — TOUCH intent", () => {
     const parsed = parseToolResult(result as any) as any;
     expect(parsed.touched).toBe(1);
     expect(parsed.touched_ids).toEqual(["touched-id"]);
-    expect(mockTouchMemory).toHaveBeenCalledWith("CLUSTER-ISOLATION-01 is still unfixed", "test-user");
+    // No explicit tags in arguments → explicitTags is undefined
+    expect(mockTouchMemory).toHaveBeenCalledWith("CLUSTER-ISOLATION-01 is still unfixed", "test-user", undefined);
   });
 
   it("MCP_TOUCH_02: TOUCH with no match returns graceful empty response", async () => {
@@ -1831,10 +1833,12 @@ describe("MCP search_memory — tag recall minimum topK", () => {
 
     // With limit=5, normal tag multiplier would be 5*10=50
     // But minimum topK of 200 should be used instead
+    // MCP-TAG-RECALL-03: candidateSize scaled to fetchLimit for tag search recall
     expect(mockHybridSearch).toHaveBeenCalledWith("security findings", {
       userId: "test-user",
       topK: 200,
       mode: "hybrid",
+      candidateSize: 200,
     });
   });
 
@@ -1863,10 +1867,129 @@ describe("MCP search_memory — tag recall minimum topK", () => {
     });
 
     // limit=50, tag multiplier 10x = 500 > 200, use 500
+    // MCP-TAG-RECALL-03: candidateSize scaled to fetchLimit for tag search recall
     expect(mockHybridSearch).toHaveBeenCalledWith("findings", {
       userId: "test-user",
       topK: 500,
       mode: "hybrid",
+      candidateSize: 500,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: Fix 1 — TOUCH tag inheritance
+// ---------------------------------------------------------------------------
+describe("MCP add_memories — TOUCH tag inheritance", () => {
+  let client: Client;
+
+  beforeAll(async () => {
+    ({ client } = await setupClientServer());
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRunRead.mockReset();
+    mockRunRead.mockResolvedValue([]);
+    mockRunWrite.mockResolvedValue([]);
+    mockClassifyIntent.mockResolvedValue({ type: "STORE" as const });
+    mockSearchEntities.mockResolvedValue([]);
+  });
+
+  it("MCP_TOUCH_TAG_01: TOUCH with tags passes them to touchMemoryByDescription", async () => {
+    mockClassifyIntent.mockResolvedValueOnce({
+      type: "TOUCH" as const,
+      target: "CLUSTER-ISOLATION-01 finding",
+    });
+    mockTouchMemory.mockResolvedValueOnce({ id: "t-id", content: "CLUSTER-ISOLATION-01 finding" });
+
+    const result = await client.callTool({
+      name: "add_memories",
+      arguments: {
+        content: "Still relevant: CLUSTER-ISOLATION-01",
+        tags: ["audit-session-24", "mem0ai/mem0"],
+      },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.touched).toBe(1);
+    expect(parsed.touched_ids).toEqual(["t-id"]);
+    // Tags should be forwarded to touchMemoryByDescription
+    expect(mockTouchMemory).toHaveBeenCalledWith(
+      "CLUSTER-ISOLATION-01 finding",
+      "test-user",
+      ["audit-session-24", "mem0ai/mem0"]
+    );
+  });
+
+  it("MCP_TOUCH_TAG_02: TOUCH without tags passes undefined", async () => {
+    mockClassifyIntent.mockResolvedValueOnce({
+      type: "TOUCH" as const,
+      target: "some finding",
+    });
+    mockTouchMemory.mockResolvedValueOnce({ id: "t-id", content: "some finding" });
+
+    await client.callTool({
+      name: "add_memories",
+      arguments: { content: "Confirm: some finding" },
+    });
+
+    expect(mockTouchMemory).toHaveBeenCalledWith("some finding", "test-user", undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: include_entities default true verification
+// ---------------------------------------------------------------------------
+describe("MCP search_memory — include_entities default true", () => {
+  let client: Client;
+
+  beforeAll(async () => {
+    ({ client } = await setupClientServer());
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRunRead.mockResolvedValue([]);
+    mockRunWrite.mockResolvedValue([]);
+    mockSearchEntities.mockResolvedValue([]);
+  });
+
+  it("MCP_ENTITIES_DEFAULT_01: search without include_entities enriches entities by default", async () => {
+    mockHybridSearch.mockResolvedValueOnce([
+      { id: "m1", content: "Alice works at Acme", rrfScore: 0.03, textRank: 1, vectorRank: 1, categories: ["work"], tags: [], createdAt: "2024-01-01", updatedAt: "2024-01-01", appName: "test-client" },
+    ]);
+    mockRunWrite.mockResolvedValueOnce([]);
+    mockSearchEntities.mockResolvedValueOnce([
+      { id: "e1", name: "Alice", type: "PERSON", description: "Engineer", memoryCount: 5, relationships: [] },
+    ]);
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "Alice" },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toHaveLength(1);
+    expect(parsed.entities).toHaveLength(1);
+    expect(parsed.entities[0].name).toBe("Alice");
+    expect(mockSearchEntities).toHaveBeenCalledWith("Alice", "test-user", { limit: 5 });
+  });
+
+  it("MCP_ENTITIES_DEFAULT_02: include_entities=false explicitly skips enrichment", async () => {
+    mockHybridSearch.mockResolvedValueOnce([
+      { id: "m1", content: "Alice works at Acme", rrfScore: 0.03, textRank: 1, vectorRank: 1, categories: ["work"], tags: [], createdAt: "2024-01-01", updatedAt: "2024-01-01", appName: "test-client" },
+    ]);
+    mockRunWrite.mockResolvedValueOnce([]);
+
+    const result = await client.callTool({
+      name: "search_memory",
+      arguments: { query: "Alice", include_entities: false },
+    });
+
+    const parsed = parseToolResult(result as any) as any;
+    expect(parsed.results).toHaveLength(1);
+    expect(parsed.entities).toBeUndefined();
+    expect(mockSearchEntities).not.toHaveBeenCalled();
   });
 });

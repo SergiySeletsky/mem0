@@ -54,7 +54,7 @@ const searchMemorySchema = {
   offset: z.number().optional().describe("Number of memories to skip -- used for paginating browse results (no query). Default: 0"),
   category: z.string().optional().describe("Filter to memories in this category only"),
   created_after: z.string().optional().describe("ISO date -- only return memories created after this date (e.g. '2026-02-01')"),
-  include_entities: z.boolean().optional().describe("Include matching entity profiles in search results (default: true for search mode). Set to false for faster keyword-only recall when entity context is not needed."),
+  include_entities: z.boolean().optional().describe("Include matching entity profiles and relationships in search results (default: true). Set to false for faster recall when entity context is not needed."),
   tag: z.string().optional().describe("Exact tag filter -- returns only memories tagged with this string (case-insensitive). Tags are set via add_memories(tags: [...])."),
 };
 const addMemoriesSchema = {
@@ -205,7 +205,7 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
 
             if (intent.type === "TOUCH") {
               console.log(`[MCP] add_memories TOUCH target="${intent.target}"`);
-              const touched = await touchMemoryByDescription(intent.target, userId);
+              const touched = await touchMemoryByDescription(intent.target, userId, explicitTags);
               results.push({ id: touched?.id ?? null, memory: text, event: "TOUCH", touched });
               continue;
             }
@@ -455,10 +455,15 @@ export function createMcpServer(userId: string, clientName: string): McpServer {
         console.log(`[MCP] search_memory search userId=${userId} query="${query}" limit=${effectiveLimit} fetchLimit=${fetchLimit}`);
 
         // Spec 02: hybrid search (BM25 + vector + RRF)
+        // MCP-TAG-RECALL-03: When tag filter is active, scale candidateSize to match
+        // fetchLimit so both search arms return enough candidates for post-filter recall.
+        // Default candidateSize (20) is too small — RRF gets at most ~40 candidates,
+        // and tag post-filter on ~40 results yields very few hits.
         const results = await hybridSearch(query!, {
           userId,
           topK: fetchLimit,
           mode: "hybrid",
+          ...(tag ? { candidateSize: fetchLimit } : {}),
         });
 
         // Apply optional post-filters (category, date, tag)
